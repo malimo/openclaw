@@ -12,6 +12,7 @@ const SIGNAL_LINK_URI_PREFIX = "sgnl://linkdevice?";
 // Wizard notes become system-agent history, so keep dependency diagnostics well below the
 // repository's per-item model-context budget while retaining the actionable stderr tail.
 const SIGNAL_LINK_ERROR_OUTPUT_LIMIT = 2_000;
+const SIGNAL_CLI_LINK_STDOUT_LIMIT_BYTES = 8 * 1024;
 const SIGNAL_CLI_LINK_QR_TIMEOUT_MS = 120_000;
 // signal-cli waits up to 30 seconds for the link URI, then 120 seconds for provisioning.
 // Leave a small startup/write buffer while still bounding hangs before either timeout starts.
@@ -146,7 +147,11 @@ export async function linkSignalCliAccount(params: {
         killProcessTree: true,
         timeoutMs: SIGNAL_CLI_LINK_TIMEOUT_MS,
         outputCapture: { stdout: "discard", stderr: "tail" },
-        maxOutputBytes: { stdout: 8 * 1024, stderr: SIGNAL_LINK_ERROR_OUTPUT_LIMIT },
+        maxOutputBytes: {
+          stdout: SIGNAL_CLI_LINK_STDOUT_LIMIT_BYTES,
+          stderr: SIGNAL_LINK_ERROR_OUTPUT_LIMIT,
+        },
+        terminateOnOutputLimit: { stdout: true },
         maxPreservedOutputLines: 1,
         preserveOutputLine: (line, stream) => {
           if (stream === "stdout") {
@@ -174,6 +179,9 @@ export async function linkSignalCliAccount(params: {
     }
     if (displayError) {
       return { ok: false, error: displayError };
+    }
+    if (result.outputLimitExceeded) {
+      return { ok: false, error: "signal-cli link exceeded its 8 KiB output limit." };
     }
     if (result.termination === "timeout") {
       return { ok: false, error: "Signal account linking timed out." };

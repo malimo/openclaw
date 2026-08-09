@@ -16,6 +16,7 @@ type CommandResult = {
   signal: NodeJS.Signals | null;
   killed: boolean;
   termination: "exit" | "timeout" | "no-output-timeout" | "signal";
+  outputLimitExceeded?: boolean;
 };
 
 type CommandOptions = {
@@ -23,6 +24,7 @@ type CommandOptions = {
   killProcessTree: boolean;
   timeoutMs: number;
   maxOutputBytes: { stdout: number; stderr: number };
+  terminateOnOutputLimit?: { stdout: boolean };
   maxPreservedOutputLines: number;
   preserveOutputLine: (line: string, stream: "stdout" | "stderr") => boolean;
   outputCapture: { stdout: string; stderr: string };
@@ -271,6 +273,29 @@ describe("linkSignalCliAccount", () => {
       ok: false,
       error: "signal-cli link finished without producing a device-link QR code.",
     });
+  });
+
+  it("terminates noisy stdout at the link output cap", async () => {
+    runCommandMock.mockResolvedValueOnce(
+      commandResult({
+        code: null,
+        signal: "SIGTERM",
+        killed: true,
+        termination: "signal",
+        outputLimitExceeded: true,
+      }),
+    );
+
+    await expect(
+      linkSignalCliAccount({
+        cliPath: "signal-cli",
+        onLinkUri: vi.fn(async () => undefined),
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: "signal-cli link exceeded its 8 KiB output limit.",
+    });
+    expect(commandOptions().terminateOnOutputLimit).toEqual({ stdout: true });
   });
 
   it("rejects a zero exit after presentation failure terminates signal-cli", async () => {
