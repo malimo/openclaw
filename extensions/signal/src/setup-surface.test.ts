@@ -173,7 +173,7 @@ describe("signalSetupWizard QR linking", () => {
   it("does not offer a discovered identity owned by a formatted sibling account", async () => {
     listSignalCliAccountsMock.mockResolvedValueOnce({
       ok: true,
-      accounts: ["+15555550123"],
+      accounts: ["signal:+1 (555) 555-0123"],
     });
     const transport = {
       kind: "managed-native" as const,
@@ -482,6 +482,10 @@ describe("signalSetupWizard QR linking", () => {
   });
 
   it("does not assign a QR-linked identity already owned by a sibling account", async () => {
+    linkSignalCliAccountMock.mockResolvedValueOnce({
+      ok: true,
+      associatedAccount: "signal:+1 (555) 555-0123",
+    });
     const transport = {
       kind: "managed-native" as const,
       cliPath: "/opt/signal-cli",

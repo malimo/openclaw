@@ -135,9 +135,10 @@ export const signalSetupWizard: ChannelSetupWizard = {
         return candidate.accountId !== resolvedAccount.accountId && account ? [account] : [];
       }),
     );
-    const availableAccounts = existingAccounts.accounts.filter(
-      (account) => !siblingAccounts.has(account),
-    );
+    const availableAccounts = existingAccounts.accounts.flatMap((account) => {
+      const normalized = normalizeSignalAccountInput(account);
+      return normalized && !siblingAccounts.has(normalized) ? [normalized] : [];
+    });
     const firstAvailableAccount = availableAccounts[0];
     if (firstAvailableAccount) {
       const accountToReuse =
@@ -211,27 +212,28 @@ export const signalSetupWizard: ChannelSetupWizard = {
     // A successful signal-cli result means the account is already linked on disk.
     // Preserve that authoritative result even if cancellation raced its final output.
     preparedCredentialValues[SIGNAL_LINK_COMPLETED_INPUT_KEY] = "true";
-    if (linkResult.associatedAccount) {
-      if (siblingAccounts.has(linkResult.associatedAccount)) {
+    const linkedAccount = normalizeSignalAccountInput(linkResult.associatedAccount);
+    if (linkedAccount) {
+      if (siblingAccounts.has(linkedAccount)) {
         // The device link succeeded, but this setup target must not claim a sibling's identity.
         // Mark it handled so the later number prompt cannot recreate the same collision.
         preparedCredentialValues[SIGNAL_LINKED_ACCOUNT_INPUT_KEY] = "true";
         await prompter.note(
-          `${linkResult.associatedAccount} is already assigned to another OpenClaw Signal account. The selected account was not changed.`,
+          `${linkedAccount} is already assigned to another OpenClaw Signal account. The selected account was not changed.`,
           "Signal account linking",
         );
         return { credentialValues: preparedCredentialValues };
       }
-      if (configuredAccount && linkResult.associatedAccount !== configuredAccount) {
+      if (configuredAccount && linkedAccount !== configuredAccount) {
         const replaceConfiguredAccount = await prompter.confirm({
-          message: `Use ${linkResult.associatedAccount} instead of configured Signal account ${configuredAccount}?`,
+          message: `Use ${linkedAccount} instead of configured Signal account ${configuredAccount}?`,
           initialValue: false,
         });
         if (!replaceConfiguredAccount) {
           return { credentialValues: preparedCredentialValues };
         }
       }
-      preparedCredentialValues.signalNumber = linkResult.associatedAccount;
+      preparedCredentialValues.signalNumber = linkedAccount;
       preparedCredentialValues[SIGNAL_LINKED_ACCOUNT_INPUT_KEY] = "true";
     } else {
       await prompter.note(
