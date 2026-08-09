@@ -447,6 +447,39 @@ describe("signalSetupWizard QR linking", () => {
     expect(result.cfg.channels?.signal?.accounts?.work?.account).toBe("+15555550444");
   });
 
+  it("does not assign a QR-linked identity already owned by a sibling account", async () => {
+    const transport = {
+      kind: "managed-native" as const,
+      cliPath: "/opt/signal-cli",
+      configPath: "~/.local/share/signal-cli",
+    };
+    const cfg = {
+      channels: {
+        signal: {
+          defaultAccount: "default",
+          accounts: {
+            default: { account: "+15555550123", transport },
+            work: { transport },
+          },
+        },
+      },
+    };
+    const note = vi.fn<WizardPrompter["note"]>(async () => undefined);
+
+    const result = await configure({
+      cfg,
+      accountId: "work",
+      prompter: { ...createQrPrompter(), note },
+    });
+
+    expect(result.cfg.channels?.signal?.accounts?.default?.account).toBe("+15555550123");
+    expect(result.cfg.channels?.signal?.accounts?.work?.account).toBeUndefined();
+    expect(note).toHaveBeenCalledWith(
+      "+15555550123 is already assigned to another OpenClaw Signal account. The selected account was not changed.",
+      "Signal account linking",
+    );
+  });
+
   it("finishes setup when signal-cli completes before the QR is acknowledged", async () => {
     const qrCode = vi.fn(async (params: Parameters<NonNullable<WizardPrompter["qrCode"]>>[0]) => {
       await params.dismissed;

@@ -211,6 +211,16 @@ export const signalSetupWizard: ChannelSetupWizard = {
     // Preserve that authoritative result even if cancellation raced its final output.
     preparedCredentialValues[SIGNAL_LINK_COMPLETED_INPUT_KEY] = "true";
     if (linkResult.associatedAccount) {
+      if (siblingAccounts.has(linkResult.associatedAccount)) {
+        // The device link succeeded, but this setup target must not claim a sibling's identity.
+        // Mark it handled so the later number prompt cannot recreate the same collision.
+        preparedCredentialValues[SIGNAL_LINKED_ACCOUNT_INPUT_KEY] = "true";
+        await prompter.note(
+          `${linkResult.associatedAccount} is already assigned to another OpenClaw Signal account. The selected account was not changed.`,
+          "Signal account linking",
+        );
+        return { credentialValues: preparedCredentialValues };
+      }
       if (configuredAccount && linkResult.associatedAccount !== configuredAccount) {
         const replaceConfiguredAccount = await prompter.confirm({
           message: `Use ${linkResult.associatedAccount} instead of configured Signal account ${configuredAccount}?`,
