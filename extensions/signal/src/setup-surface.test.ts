@@ -497,23 +497,26 @@ describe("signalSetupWizard QR linking", () => {
           defaultAccount: "default",
           accounts: {
             default: { account: "+15555550123", transport },
-            work: { transport },
           },
         },
       },
     };
     const note = vi.fn<WizardPrompter["note"]>(async () => undefined);
 
-    const result = await configure({
-      cfg,
-      accountId: "work",
-      prompter: { ...createQrPrompter(), note },
-    });
+    await expect(
+      configure({
+        cfg,
+        accountId: "work",
+        prompter: { ...createQrPrompter(), note },
+      }),
+    ).rejects.toThrow(
+      "+15555550123 is already assigned to another OpenClaw Signal account. Choose a different account or remove the existing assignment, then retry setup.",
+    );
 
-    expect(result.cfg.channels?.signal?.accounts?.default?.account).toBe("+15555550123");
-    expect(result.cfg.channels?.signal?.accounts?.work?.account).toBeUndefined();
+    expect(cfg.channels.signal.accounts.default.account).toBe("+15555550123");
+    expect(cfg.channels.signal.accounts).not.toHaveProperty("work");
     expect(note).toHaveBeenCalledWith(
-      "+15555550123 is already assigned to another OpenClaw Signal account. The selected account was not changed.",
+      "+15555550123 is already assigned to another OpenClaw Signal account. Choose a different account or remove the existing assignment, then retry setup.",
       "Signal account linking",
     );
   });

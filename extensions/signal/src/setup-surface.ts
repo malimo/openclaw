@@ -216,13 +216,12 @@ export const signalSetupWizard: ChannelSetupWizard = {
     if (linkedAccount) {
       if (siblingAccounts.has(linkedAccount)) {
         // The device link succeeded, but this setup target must not claim a sibling's identity.
-        // Mark it handled so the later number prompt cannot recreate the same collision.
-        preparedCredentialValues[SIGNAL_LINKED_ACCOUNT_INPUT_KEY] = "true";
-        await prompter.note(
-          `${linkedAccount} is already assigned to another OpenClaw Signal account. The selected account was not changed.`,
-          "Signal account linking",
+        // Abort before later setup inputs can create a transport-only target.
+        const error = new Error(
+          `${linkedAccount} is already assigned to another OpenClaw Signal account. Choose a different account or remove the existing assignment, then retry setup.`,
         );
-        return { credentialValues: preparedCredentialValues };
+        await prompter.note(error.message, "Signal account linking");
+        throw error;
       }
       if (configuredAccount && linkedAccount !== configuredAccount) {
         const replaceConfiguredAccount = await prompter.confirm({
