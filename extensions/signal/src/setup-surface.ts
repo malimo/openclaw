@@ -15,6 +15,7 @@ import {
   signalCompletionNote,
   signalDmPolicy,
   signalNumberTextInput,
+  normalizeSignalAccountInput,
 } from "./setup-core.js";
 import { linkSignalCliAccount, listSignalCliAccounts } from "./signal-cli-link.js";
 
@@ -115,7 +116,7 @@ export const signalSetupWizard: ChannelSetupWizard = {
         : undefined;
     }
     const configPath = transport.configPath;
-    const configuredAccount = resolvedAccount.config.account?.trim();
+    const configuredAccount = normalizeSignalAccountInput(resolvedAccount.config.account);
     const existingAccounts = await listSignalCliAccounts({
       cliPath: currentCliPath,
       ...(configPath ? { configPath } : {}),
@@ -130,7 +131,7 @@ export const signalSetupWizard: ChannelSetupWizard = {
     const siblingAccounts = new Set(
       listSignalAccountIds(cfg).flatMap((candidateAccountId) => {
         const candidate = resolveSignalAccount({ cfg, accountId: candidateAccountId });
-        const account = candidate.config.account?.trim();
+        const account = normalizeSignalAccountInput(candidate.config.account);
         return candidate.accountId !== resolvedAccount.accountId && account ? [account] : [];
       }),
     );

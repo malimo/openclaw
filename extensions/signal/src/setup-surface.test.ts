@@ -164,9 +164,41 @@ describe("signalSetupWizard QR linking", () => {
       accounts: ["+15555550123", "+15555550124"],
     });
 
-    await expect(prepare({ cfg: createConfig("+15555550123") })).resolves.toEqual(
+    await expect(prepare({ cfg: createConfig("signal:+1 (555) 555-0123") })).resolves.toEqual(
       linkedCredentials(),
     );
+    expect(linkSignalCliAccountMock).not.toHaveBeenCalled();
+  });
+
+  it("does not offer a discovered identity owned by a formatted sibling account", async () => {
+    listSignalCliAccountsMock.mockResolvedValueOnce({
+      ok: true,
+      accounts: ["+15555550123"],
+    });
+    const transport = {
+      kind: "managed-native" as const,
+      cliPath: "/opt/signal-cli",
+      configPath: "~/.local/share/signal-cli",
+    };
+    const cfg = {
+      channels: {
+        signal: {
+          defaultAccount: "default",
+          accounts: {
+            default: { account: "signal:+1 (555) 555-0123", transport },
+            work: { transport },
+          },
+        },
+      },
+    };
+
+    await expect(
+      prepare({
+        cfg,
+        accountId: "work",
+        prompter: createQrPrompter({ confirmValues: [false, false] }),
+      }),
+    ).resolves.toBeUndefined();
     expect(linkSignalCliAccountMock).not.toHaveBeenCalled();
   });
 
@@ -434,7 +466,7 @@ describe("signalSetupWizard QR linking", () => {
         signal: {
           defaultAccount: "default",
           accounts: {
-            default: { account: "+15555550123", transport },
+            default: { account: "signal:+1 (555) 555-0123", transport },
             work: { transport },
           },
         },
@@ -443,7 +475,9 @@ describe("signalSetupWizard QR linking", () => {
 
     const result = await configure({ cfg, accountId: "work" });
 
-    expect(result.cfg.channels?.signal?.accounts?.default?.account).toBe("+15555550123");
+    expect(result.cfg.channels?.signal?.accounts?.default?.account).toBe(
+      "signal:+1 (555) 555-0123",
+    );
     expect(result.cfg.channels?.signal?.accounts?.work?.account).toBe("+15555550444");
   });
 
