@@ -112,7 +112,14 @@ describe("listSignalCliAccounts", () => {
   it("rejects failed or malformed account discovery", async () => {
     runCommandMock
       .mockResolvedValueOnce(commandResult({ code: 1, stderr: "store locked" }))
-      .mockResolvedValueOnce(commandResult({ stdout: '[{"number":"not-e164"}]' }));
+      .mockResolvedValueOnce(commandResult({ stdout: '[{"number":"not-e164"}]' }))
+      .mockResolvedValueOnce(
+        commandResult({
+          stdout: '[{"number":"+15555550123"}]',
+          signal: "SIGTERM",
+          termination: "signal",
+        }),
+      );
 
     await expect(listSignalCliAccounts({ cliPath: "signal-cli" })).resolves.toEqual({
       ok: false,
@@ -121,6 +128,10 @@ describe("listSignalCliAccounts", () => {
     await expect(listSignalCliAccounts({ cliPath: "signal-cli" })).resolves.toEqual({
       ok: false,
       error: "signal-cli returned an invalid account list.",
+    });
+    await expect(listSignalCliAccounts({ cliPath: "signal-cli" })).resolves.toEqual({
+      ok: false,
+      error: "signal-cli could not inspect its linked accounts.",
     });
   });
 });
@@ -262,7 +273,7 @@ describe("linkSignalCliAccount", () => {
     });
   });
 
-  it("terminates the signal-cli process tree when presentation fails", async () => {
+  it("rejects a zero exit after presentation failure terminates signal-cli", async () => {
     const command = createDeferredCommand();
     const presentationFailure = linkSignalCliAccount({
       cliPath: "signal-cli",
@@ -274,7 +285,7 @@ describe("linkSignalCliAccount", () => {
     await vi.waitFor(() => expect(commandOptions().signal.aborted).toBe(true));
     expect(commandOptions().killProcessTree).toBe(true);
     command.resolve(
-      commandResult({ code: null, signal: "SIGTERM", killed: true, termination: "signal" }),
+      commandResult({ code: 0, signal: "SIGTERM", killed: true, termination: "signal" }),
     );
     await expect(presentationFailure).resolves.toEqual({
       ok: false,

@@ -53,7 +53,7 @@ export async function listSignalCliAccounts(params: {
         terminateOnOutputLimit: { stdout: true },
       },
     );
-    if (result.code !== 0) {
+    if (result.code !== 0 || result.termination !== "exit") {
       return {
         ok: false,
         error: result.stderr.trim() || "signal-cli could not inspect its linked accounts.",
@@ -161,7 +161,7 @@ export async function linkSignalCliAccount(params: {
     resolveCompletion();
     await displayPromise;
 
-    if (result.code === 0) {
+    if (result.code === 0 && result.termination === "exit") {
       if (!linkUriSeen) {
         return {
           ok: false,
