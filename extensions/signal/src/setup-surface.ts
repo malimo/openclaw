@@ -4,6 +4,7 @@ import {
   createDetectedBinaryStatus,
   setSetupChannelEnabled,
   type ChannelSetupWizard,
+  WizardCancelledError,
 } from "openclaw/plugin-sdk/setup";
 import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 import { listSignalAccountIds, resolveSignalAccount } from "./accounts.js";
@@ -229,7 +230,9 @@ export const signalSetupWizard: ChannelSetupWizard = {
           initialValue: false,
         });
         if (!replaceConfiguredAccount) {
-          return { credentialValues: preparedCredentialValues };
+          throw new WizardCancelledError(
+            `Signal setup cancelled: ${linkedAccount} was linked in signal-cli, but replacing configured Signal account ${configuredAccount} was declined.`,
+          );
         }
       }
       preparedCredentialValues.signalNumber = linkedAccount;

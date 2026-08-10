@@ -385,7 +385,7 @@ describe("signalSetupWizard QR linking", () => {
     });
   });
 
-  it("preserves the configured account when a different QR-linked account is declined", async () => {
+  it("cancels setup when a different QR-linked account is declined", async () => {
     linkSignalCliAccountMock.mockResolvedValueOnce({
       ok: true,
       associatedAccount: "+15555550124",
@@ -393,12 +393,16 @@ describe("signalSetupWizard QR linking", () => {
     const confirmValues = [false, true, false, true];
     const confirm = vi.fn(async () => confirmValues.shift() ?? false);
 
-    const result = await configure({
-      cfg: createConfig("+15555550123"),
-      prompter: { ...createQrPrompter(), confirm },
+    await expect(
+      configure({
+        cfg: createConfig("+15555550123"),
+        prompter: { ...createQrPrompter(), confirm },
+      }),
+    ).rejects.toMatchObject({
+      name: "WizardCancelledError",
+      message:
+        "Signal setup cancelled: +15555550124 was linked in signal-cli, but replacing configured Signal account +15555550123 was declined.",
     });
-
-    expect(result.cfg.channels?.signal?.account).toBe("+15555550123");
     expect(confirm).toHaveBeenCalledWith({
       message: "Use +15555550124 instead of configured Signal account +15555550123?",
       initialValue: false,
