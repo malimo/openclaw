@@ -329,39 +329,22 @@ describe("signalSetupWizard QR linking", () => {
     expect(linkSignalCliAccountMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "a failed link",
-      linkResult: { ok: false as const, error: "Link request timed out" },
-      note: "Link request timed out",
-      showCompletionNote: true,
-    },
-    {
-      name: "a linked account that signal-cli did not identify",
-      linkResult: { ok: true as const },
-      note: "signal-cli linked successfully, but OpenClaw could not identify the linked account. Enter its Signal number to finish setup.",
-      showCompletionNote: false,
-    },
-  ])(
-    "accepts a manual number after $name",
-    async ({ linkResult, note: expectedNote, showCompletionNote }) => {
-      linkSignalCliAccountMock.mockResolvedValueOnce(linkResult);
-      const note = vi.fn<WizardPrompter["note"]>(async () => undefined);
-      const text = vi.fn(async () => "+15555550199");
+  it("accepts a manual number after a failed link", async () => {
+    linkSignalCliAccountMock.mockResolvedValueOnce({
+      ok: false,
+      error: "Link request timed out",
+    });
+    const note = vi.fn<WizardPrompter["note"]>(async () => undefined);
+    const text = vi.fn(async () => "+15555550199");
 
-      const result = await configure({ prompter: { ...createQrPrompter(), note, text } });
+    const result = await configure({ prompter: { ...createQrPrompter(), note, text } });
 
-      expect(result.cfg.channels?.signal?.account).toBe("+15555550199");
-      expect(text).toHaveBeenCalledOnce();
-      expect(note).toHaveBeenCalledWith(expectedNote, "Signal account linking");
-      const completionCall = note.mock.calls.find(([, title]) => title === "Signal next steps");
-      if (showCompletionNote) {
-        expect(completionCall?.[0]).toContain('signal-cli link -n "OpenClaw"');
-      } else {
-        expect(completionCall).toBeUndefined();
-      }
-    },
-  );
+    expect(result.cfg.channels?.signal?.account).toBe("+15555550199");
+    expect(text).toHaveBeenCalledOnce();
+    expect(note).toHaveBeenCalledWith("Link request timed out", "Signal account linking");
+    const completionCall = note.mock.calls.find(([, title]) => title === "Signal next steps");
+    expect(completionCall?.[0]).toContain('signal-cli link -n "OpenClaw"');
+  });
 
   it("preserves a successful linked account when cancellation races completion", async () => {
     const abortController = new AbortController();
@@ -488,7 +471,7 @@ describe("signalSetupWizard QR linking", () => {
   it("does not assign a QR-linked identity already owned by a sibling account", async () => {
     linkSignalCliAccountMock.mockResolvedValueOnce({
       ok: true,
-      associatedAccount: "signal:+1 (555) 555-0123",
+      associatedAccount: "+15555550123",
     });
     const transport = {
       kind: "managed-native" as const,

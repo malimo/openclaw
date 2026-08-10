@@ -213,36 +213,29 @@ export const signalSetupWizard: ChannelSetupWizard = {
     // A successful signal-cli result means the account is already linked on disk.
     // Preserve that authoritative result even if cancellation raced its final output.
     preparedCredentialValues[SIGNAL_LINK_COMPLETED_INPUT_KEY] = "true";
-    const linkedAccount = normalizeSignalAccountInput(linkResult.associatedAccount);
-    if (linkedAccount) {
-      if (siblingAccounts.has(linkedAccount)) {
-        // The device link succeeded, but this setup target must not claim a sibling's identity.
-        // Abort before later setup inputs can create a transport-only target.
-        const error = new Error(
-          `${linkedAccount} is already assigned to another OpenClaw Signal account. Choose a different account or remove the existing assignment, then retry setup.`,
-        );
-        await prompter.note(error.message, "Signal account linking");
-        throw error;
-      }
-      if (configuredAccount && linkedAccount !== configuredAccount) {
-        const replaceConfiguredAccount = await prompter.confirm({
-          message: `Use ${linkedAccount} instead of configured Signal account ${configuredAccount}?`,
-          initialValue: false,
-        });
-        if (!replaceConfiguredAccount) {
-          throw new WizardCancelledError(
-            `Signal setup cancelled: ${linkedAccount} was linked in signal-cli, but replacing configured Signal account ${configuredAccount} was declined.`,
-          );
-        }
-      }
-      preparedCredentialValues.signalNumber = linkedAccount;
-      preparedCredentialValues[SIGNAL_LINKED_ACCOUNT_INPUT_KEY] = "true";
-    } else {
-      await prompter.note(
-        "signal-cli linked successfully, but OpenClaw could not identify the linked account. Enter its Signal number to finish setup.",
-        "Signal account linking",
+    const linkedAccount = linkResult.associatedAccount;
+    if (siblingAccounts.has(linkedAccount)) {
+      // The device link succeeded, but this setup target must not claim a sibling's identity.
+      // Abort before later setup inputs can create a transport-only target.
+      const error = new Error(
+        `${linkedAccount} is already assigned to another OpenClaw Signal account. Choose a different account or remove the existing assignment, then retry setup.`,
       );
+      await prompter.note(error.message, "Signal account linking");
+      throw error;
     }
+    if (configuredAccount && linkedAccount !== configuredAccount) {
+      const replaceConfiguredAccount = await prompter.confirm({
+        message: `Use ${linkedAccount} instead of configured Signal account ${configuredAccount}?`,
+        initialValue: false,
+      });
+      if (!replaceConfiguredAccount) {
+        throw new WizardCancelledError(
+          `Signal setup cancelled: ${linkedAccount} was linked in signal-cli, but replacing configured Signal account ${configuredAccount} was declined.`,
+        );
+      }
+    }
+    preparedCredentialValues.signalNumber = linkedAccount;
+    preparedCredentialValues[SIGNAL_LINKED_ACCOUNT_INPUT_KEY] = "true";
     return { credentialValues: preparedCredentialValues };
   },
   credentials: [],
