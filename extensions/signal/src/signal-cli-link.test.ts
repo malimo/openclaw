@@ -65,14 +65,6 @@ function emitStdoutLine(line: string) {
   commandOptions().preserveOutputLine(line, "stdout");
 }
 
-function emitStdoutLineForCall(callIndex: number, line: string) {
-  const options = runCommandMock.mock.calls[callIndex]?.[1] as CommandOptions | undefined;
-  if (!options) {
-    throw new Error(`expected command options for call ${callIndex}`);
-  }
-  options.preserveOutputLine(line, "stdout");
-}
-
 beforeEach(() => {
   runCommandMock.mockReset();
 });
@@ -213,6 +205,7 @@ describe("linkSignalCliAccount", () => {
     });
 
     emitStdoutLine("sgnl://linkdevice?uuid=test&pub_key=test");
+    emitStdoutLine("Associated with: +15555550123");
     command.resolve(commandResult());
 
     let completed = false;
@@ -246,7 +239,7 @@ describe("linkSignalCliAccount", () => {
     });
   });
 
-  it("bounds signal-cli errors and rejects success without a link URI", async () => {
+  it("bounds signal-cli errors and rejects incomplete success output", async () => {
     const failedCommand = createDeferredCommand();
     const failurePromise = linkSignalCliAccount({
       cliPath: "signal-cli",
@@ -272,6 +265,18 @@ describe("linkSignalCliAccount", () => {
     await expect(missingUriPromise).resolves.toEqual({
       ok: false,
       error: "signal-cli link finished without producing a device-link QR code.",
+    });
+
+    const missingAccountCommand = createDeferredCommand();
+    const missingAccountPromise = linkSignalCliAccount({
+      cliPath: "signal-cli",
+      onLinkUri: vi.fn(async () => undefined),
+    });
+    emitStdoutLine("sgnl://linkdevice?uuid=test&pub_key=test");
+    missingAccountCommand.resolve(commandResult());
+    await expect(missingAccountPromise).resolves.toEqual({
+      ok: false,
+      error: "signal-cli link finished without reporting the associated account.",
     });
   });
 
@@ -326,6 +331,7 @@ describe("linkSignalCliAccount", () => {
     });
     expect(commandOptions().timeoutMs).toBe(3 * 60_000);
     emitStdoutLine("sgnl://linkdevice?uuid=test&pub_key=test");
+    emitStdoutLine("Associated with: +15555550123");
     command.resolve(commandResult());
     await expect(resultPromise).resolves.toMatchObject({ ok: true });
   });
@@ -386,14 +392,13 @@ describe("linkSignalCliAccount", () => {
     const firstCommand = createDeferredCommand();
     const first = linkSignalCliAccount({
       cliPath: "signal-cli",
-      configPath: path.join(storePath, "..", "shared"),
       onLinkUri: vi.fn(async () => undefined),
     });
 
     await expect(
       linkSignalCliAccount({
         cliPath: "signal-cli",
-        configPath: storePath,
+        configPath: "~/.local/share/signal-cli",
         onLinkUri: vi.fn(async () => undefined),
       }),
     ).resolves.toEqual({
@@ -403,6 +408,7 @@ describe("linkSignalCliAccount", () => {
     expect(runCommandMock).toHaveBeenCalledOnce();
 
     emitStdoutLine("sgnl://linkdevice?uuid=first&pub_key=first");
+    emitStdoutLine("Associated with: +15555550123");
     firstCommand.resolve(commandResult());
     await expect(first).resolves.toMatchObject({ ok: true });
 
@@ -413,33 +419,10 @@ describe("linkSignalCliAccount", () => {
       onLinkUri: vi.fn(async () => undefined),
     });
     emitStdoutLine("sgnl://linkdevice?uuid=retry&pub_key=retry");
+    emitStdoutLine("Associated with: +15555550123");
     retryCommand.resolve(commandResult());
     await expect(retry).resolves.toMatchObject({ ok: true });
     expect(runCommandMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("allows concurrent links for independent config stores", async () => {
-    const firstCommand = createDeferredCommand();
-    const first = linkSignalCliAccount({
-      cliPath: "signal-cli",
-      configPath: path.join(os.tmpdir(), "openclaw-signal-link", "store-a"),
-      onLinkUri: vi.fn(async () => undefined),
-    });
-    const secondCommand = createDeferredCommand();
-    const second = linkSignalCliAccount({
-      cliPath: "signal-cli",
-      configPath: path.join(os.tmpdir(), "openclaw-signal-link", "store-b"),
-      onLinkUri: vi.fn(async () => undefined),
-    });
-
-    expect(runCommandMock).toHaveBeenCalledTimes(2);
-    emitStdoutLineForCall(0, "sgnl://linkdevice?uuid=first&pub_key=first");
-    emitStdoutLineForCall(1, "sgnl://linkdevice?uuid=second&pub_key=second");
-    firstCommand.resolve(commandResult());
-    secondCommand.resolve(commandResult());
-
-    await expect(first).resolves.toMatchObject({ ok: true });
-    await expect(second).resolves.toMatchObject({ ok: true });
   });
 
   it("returns an error when signal-cli cannot start", async () => {

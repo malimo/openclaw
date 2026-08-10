@@ -1,9 +1,8 @@
-import path from "node:path";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { z } from "zod";
 import { resolveSignalCliConfigPath } from "./signal-cli-config-path.js";
 
-type SignalCliLinkResult = { ok: true; associatedAccount?: string } | { ok: false; error: string };
+type SignalCliLinkResult = { ok: true; associatedAccount: string } | { ok: false; error: string };
 type SignalCliAccountsResult = { ok: true; accounts: string[] } | { ok: false; error: string };
 
 type SignalCliLinkCompletion = Promise<void>;
@@ -19,8 +18,7 @@ const SIGNAL_CLI_LINK_QR_TIMEOUT_MS = 120_000;
 const SIGNAL_CLI_LINK_TIMEOUT_MS = 3 * 60_000;
 const SIGNAL_CLI_LIST_TIMEOUT_MS = 10_000;
 const SignalCliAccountsSchema = z.array(z.object({ number: z.string().regex(/^\+\d{5,15}$/u) }));
-const DEFAULT_SIGNAL_CLI_STORE_KEY = "<signal-cli-default-store>";
-const activeSignalCliLinkStores = new Set<string>();
+let signalCliLinkActive = false;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -28,13 +26,6 @@ function errorMessage(error: unknown): string {
 
 function signalCliArgs(configPath: string | undefined): string[] {
   return configPath?.trim() ? ["--config", resolveSignalCliConfigPath(configPath)] : [];
-}
-
-function signalCliStoreKey(configPath: string | undefined): string {
-  const configuredPath = configPath?.trim();
-  return configuredPath
-    ? path.resolve(resolveSignalCliConfigPath(configuredPath))
-    : DEFAULT_SIGNAL_CLI_STORE_KEY;
 }
 
 export async function listSignalCliAccounts(params: {
@@ -82,13 +73,12 @@ export async function linkSignalCliAccount(params: {
   if (params.signal?.aborted) {
     return { ok: false, error: "Signal account linking was cancelled." };
   }
-  const storeKey = signalCliStoreKey(params.configPath);
-  // Provisioning mutates one signal-cli store. Serialize that store without
-  // blocking accounts whose managed-native transports use independent stores.
-  if (activeSignalCliLinkStores.has(storeKey)) {
+  // signal-cli chooses its implicit store from process environment. Serialize linking globally
+  // so implicit and explicit aliases cannot mutate the same dependency-owned store concurrently.
+  if (signalCliLinkActive) {
     return { ok: false, error: "Signal account linking is already in progress." };
   }
-  activeSignalCliLinkStores.add(storeKey);
+  signalCliLinkActive = true;
 
   const commandAbort = new AbortController();
   let displayError: string | undefined;
@@ -173,9 +163,15 @@ export async function linkSignalCliAccount(params: {
           error: "signal-cli link finished without producing a device-link QR code.",
         };
       }
+      if (!associatedAccount) {
+        return {
+          ok: false,
+          error: "signal-cli link finished without reporting the associated account.",
+        };
+      }
       // signal-cli prints the account only after finishDeviceLink succeeds. A late client
       // cancellation must not turn that durable success into a second linking attempt.
-      return { ok: true, ...(associatedAccount ? { associatedAccount } : {}) };
+      return { ok: true, associatedAccount };
     }
     if (displayError) {
       return { ok: false, error: displayError };
@@ -201,6 +197,6 @@ export async function linkSignalCliAccount(params: {
     return { ok: false, error: `Could not start signal-cli: ${errorMessage(error)}` };
   } finally {
     params.signal?.removeEventListener("abort", abort);
-    activeSignalCliLinkStores.delete(storeKey);
+    signalCliLinkActive = false;
   }
 }
