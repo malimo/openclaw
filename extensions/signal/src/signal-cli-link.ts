@@ -101,6 +101,9 @@ export async function linkSignalCliAccount(params: {
   params.signal?.addEventListener("abort", abort, { once: true });
 
   const processLine = (line: string) => {
+    if (displayError) {
+      return;
+    }
     const trimmed = line.trim();
     if (!linkUriSeen && trimmed.startsWith(SIGNAL_LINK_URI_PREFIX)) {
       linkUriSeen = true;

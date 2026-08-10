@@ -387,6 +387,30 @@ describe("linkSignalCliAccount", () => {
     });
   });
 
+  it("ignores a buffered link URI after cancellation", async () => {
+    const command = createDeferredCommand();
+    const abortController = new AbortController();
+    const onLinkUri = vi.fn(async () => undefined);
+    const resultPromise = linkSignalCliAccount({
+      cliPath: "signal-cli",
+      signal: abortController.signal,
+      onLinkUri,
+    });
+
+    abortController.abort();
+    emitStdoutLine("sgnl://linkdevice?uuid=late&pub_key=late");
+    await Promise.resolve();
+
+    expect(onLinkUri).not.toHaveBeenCalled();
+    command.resolve(
+      commandResult({ code: null, signal: "SIGTERM", killed: true, termination: "signal" }),
+    );
+    await expect(resultPromise).resolves.toEqual({
+      ok: false,
+      error: "Signal account linking was cancelled.",
+    });
+  });
+
   it("rejects overlapping links until the active process has stopped", async () => {
     const storePath = path.join(os.tmpdir(), "openclaw-signal-link", "shared");
     const firstCommand = createDeferredCommand();
