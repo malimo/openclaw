@@ -4,8 +4,10 @@ import type {
 } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { WizardStep } from "../../api/types.ts";
-import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
+import {
+  renderWizardStepControls,
+  type WizardStepPresentation,
+} from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
@@ -22,7 +24,7 @@ export type CustodianMessage = {
   text: string;
   at: number;
   question: CustodianStructuredQuestion | null;
-  step: WizardStep | null;
+  step: WizardStepPresentation | null;
 };
 
 export function hasUnresolvedCustodianQuestion(

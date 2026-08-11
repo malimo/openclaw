@@ -9,9 +9,13 @@ import { renderSensitiveInput } from "./sensitive-input.ts";
 import "../styles/wizard-step-controls.css";
 
 type WizardStepOption = NonNullable<WizardStep["options"]>[number];
+type WizardQrStep = Extract<WizardStep, { type: "qr" }>;
+export type WizardStepPresentation =
+  | WizardStep
+  | (Omit<WizardQrStep, "qrDataUrl"> & { qrDataUrl?: undefined; expiresInMs: 0 });
 
 type WizardStepControlsProps = {
-  step: WizardStep;
+  step: WizardStepPresentation;
   /** Current draft answer; owned by the caller so it survives re-renders. */
   value: unknown;
   /** Disables every control while an answer is in flight. */
@@ -61,7 +65,7 @@ function renderOptionBody(option: WizardStepOption, presentation?: "channels", s
   `;
 }
 
-function renderDeviceCode(step: WizardStep) {
+function renderDeviceCode(step: WizardStepPresentation) {
   const deviceCode = step.deviceCode;
   if (!deviceCode) {
     return nothing;
@@ -170,6 +174,27 @@ function renderContinueStep(props: WizardStepControlsProps) {
       : nothing}
     ${renderDeviceCode(step)}
     ${renderAnswerButton(props, t("modelSetup.wizard.continue"), () => props.onAnswer(undefined))}
+  `;
+}
+
+function renderQrStep(props: WizardStepControlsProps) {
+  const dataUrl = props.step.qrDataUrl;
+  const active =
+    typeof dataUrl === "string" &&
+    dataUrl.startsWith("data:image/png;base64,") &&
+    typeof props.step.expiresInMs === "number" &&
+    props.step.expiresInMs > 0;
+  return html`
+    ${renderMessage(props)}
+    ${active
+      ? html`<img class="wizard-step__qr" src=${dataUrl} alt=${t("custodian.setupQrCodeAlt")} />
+          <div class="muted" role="status" aria-live="polite">
+            ${t("custodian.setupQrCodeWaiting")}
+          </div>`
+      : html`<div class="muted" role="status">${t("custodian.setupQrCodeExpired")}</div>`}
+    ${props.leadingAction
+      ? html`<div class=${stepClass(props, "actions")}>${props.leadingAction}</div>`
+      : nothing}
   `;
 }
 
@@ -333,10 +358,8 @@ export function renderWizardStepControls(
       return props.step.executor === "gateway"
         ? renderProgressStep(props)
         : renderContinueStep(props);
-    // QR steps need a client-owned presentation; clients without one must not
-    // turn them into an answerable generic step.
     case "qr":
-      return nothing;
+      return renderQrStep(props);
     // These show whatever the step supplies behind a single Continue.
     case "note":
     case "action":

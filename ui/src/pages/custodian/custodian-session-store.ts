@@ -16,7 +16,14 @@ import {
 } from "../../lib/gateway-methods.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { pathForCustodianAgentHandoff } from "./custodian-navigation.ts";
-import { custodianWizardSubmission, initialCustodianWizardValue } from "./custodian-wizard-step.ts";
+import {
+  CustodianQrScheduler,
+  custodianWizardSubmission,
+  findCustodianQrStep,
+  initialCustodianWizardValue,
+  replaceCustodianQrStep,
+  scrubCustodianQrSteps,
+} from "./custodian-wizard-step.ts";
 import * as eventNudgeState from "./event-nudge.ts";
 import {
   custodianChatParams,
@@ -56,6 +63,7 @@ export class CustodianSessionStore {
   sending = false;
   sensitive = false;
   wizardInputPending = false;
+  wizardSettling = false;
   wizardValue: unknown;
   wizardSecretVisible = false;
   questionReplyUncertain = false;
@@ -89,6 +97,21 @@ export class CustodianSessionStore {
   private agentCleanup: (() => void) | null = null;
   private eventCleanup: (() => void) | null = null;
   private readonly listeners = new Set<StoreListener>();
+  private readonly qrScheduler = new CustodianQrScheduler({
+    onExpire: (stepId, notify) => {
+      this.messages = scrubCustodianQrSteps(this.messages, stepId);
+      if (notify) {
+        this.emit();
+      }
+    },
+    onPoll: (client, stepId, presentationGeneration) => {
+      void this.requestReply(
+        client,
+        { sessionId: this.sessionId, pollStepId: stepId },
+        { pollStepId: stepId, qrPresentationGeneration: presentationGeneration },
+      );
+    },
+  });
 
   subscribe(listener: StoreListener): () => void {
     this.listeners.add(listener);
@@ -159,7 +182,7 @@ export class CustodianSessionStore {
       this.messages,
       this.dismissedQuestions,
       this.answeredQuestions,
-      this.wizardInputPending,
+      this.wizardInputPending || this.wizardSettling,
       this.questionReplyUncertain,
     );
   }
@@ -197,7 +220,15 @@ export class CustodianSessionStore {
     // Trim decides emptiness only; sensitive values may carry meaningful whitespace.
     const message = this.sensitive ? text : text.trim();
     const client = this.activeClient;
-    if (!message.trim() || !client || !this.chatAvailable || this.sending || this.setupRequired) {
+    if (
+      !message.trim() ||
+      !client ||
+      !this.chatAvailable ||
+      this.sending ||
+      this.setupRequired ||
+      this.wizardInputPending ||
+      this.wizardSettling
+    ) {
       this.emit();
       return "rejected";
     }
@@ -317,16 +348,17 @@ export class CustodianSessionStore {
   }
 
   answerWizardStep(message: CustodianMessage, value: unknown): void {
-    if (!message.step || !this.wizardInputPending) {
+    const step = message.step;
+    if (!step || !this.wizardInputPending) {
       return;
     }
-    const submission = custodianWizardSubmission(message.step, value);
+    const submission = custodianWizardSubmission(step, value);
     const client = this.activeClient;
     if (!submission || !client || !this.chatAvailable || this.sending || this.setupRequired) {
       this.emit();
       return;
     }
-    const displayText = message.step.sensitive ? t("custodian.sensitiveReply") : submission.display;
+    const displayText = step.sensitive ? t("custodian.sensitiveReply") : submission.display;
     void this.sendUserTurn(
       client,
       { sessionId: this.sessionId, wizardAnswer: submission.answer },
@@ -340,7 +372,7 @@ export class CustodianSessionStore {
     const client = this.activeClient;
     if (
       !step ||
-      !this.wizardInputPending ||
+      (!this.wizardInputPending && !(this.wizardSettling && step.type === "qr")) ||
       !client ||
       !this.chatAvailable ||
       !this.wizardCancelAvailable ||
@@ -349,6 +381,12 @@ export class CustodianSessionStore {
     ) {
       this.emit();
       return;
+    }
+    if (step.type === "qr") {
+      // Cancellation is the only client mutation for a passive QR. Stop its poll before
+      // sending so a timer cannot abort the owner-controlled cancellation request.
+      this.qrScheduler.clear();
+      this.messages = scrubCustodianQrSteps(this.messages, step.id);
     }
     void this.sendUserTurn(
       client,
@@ -366,6 +404,8 @@ export class CustodianSessionStore {
   }
 
   private revokeNavigationAuthority(): void {
+    this.qrScheduler.clear();
+    this.messages = scrubCustodianQrSteps(this.messages);
     this.requestAbort?.abort();
     this.requestAbort = null;
     this.requestEpoch += 1;
@@ -434,7 +474,11 @@ export class CustodianSessionStore {
     this.input = "";
     this.wizardValue = undefined;
     this.wizardSecretVisible = false;
-    this.sensitive = this.wizardInputPending = this.questionReplyUncertain = false;
+    this.sensitive =
+      this.wizardInputPending =
+      this.wizardSettling =
+      this.questionReplyUncertain =
+        false;
     this.error = null;
     this.setupIssue = null;
     this.earlierBoundaryAfterId = this.messages.at(-1)?.id ?? null;
@@ -463,6 +507,10 @@ export class CustodianSessionStore {
       client !== this.sessionClient;
     const ownershipChanged =
       this.sessionOwnershipKey !== null && ownershipKey !== this.sessionOwnershipKey;
+    const pendingQrStepId =
+      this.wizardInputPending || this.wizardSettling
+        ? this.messages.findLast((message) => message.step?.type === "qr")?.step?.id
+        : undefined;
     if (
       client === this.activeClient &&
       !variantChanged &&
@@ -473,6 +521,8 @@ export class CustodianSessionStore {
     ) {
       return;
     }
+    this.qrScheduler.clear();
+    this.messages = scrubCustodianQrSteps(this.messages);
     const requestWasPending = this.sending && this.retryParams !== null;
     const pendingParams = requestWasPending ? this.retryParams : null;
     this.activeClient = client;
@@ -495,6 +545,15 @@ export class CustodianSessionStore {
       }
       this.chatAvailable = true;
       this.abandonPendingUserTurn(pendingParams);
+      if (pendingQrStepId) {
+        // The Gateway owns reconnect authorization. Resume observation with the retained
+        // session id and rotate only if it returns the typed invalidation response.
+        this.retryParams = null;
+        this.error = null;
+        this.sessionClient = client;
+        this.qrScheduler.schedulePoll(client, pendingQrStepId);
+        return;
+      }
       this.rotateVolatileSession(client, this.currentSessionVariant());
       return;
     } else if (requestWasPending) {
@@ -526,6 +585,14 @@ export class CustodianSessionStore {
     if (this.sessionStarted) {
       if (!this.retryParams) {
         this.error = requestWasPending ? this.error : null;
+      }
+      const pendingStep =
+        this.wizardInputPending || this.wizardSettling
+          ? this.messages.findLast((message) => message.step !== null)?.step
+          : null;
+      if (pendingStep?.type === "qr") {
+        // A reconnect invalidates the old timer, but the Gateway still owns the QR session.
+        this.qrScheduler.schedulePoll(client, pendingStep.id);
       }
       return;
     }
@@ -600,6 +667,7 @@ export class CustodianSessionStore {
   }
 
   private clearConversation(): void {
+    this.qrScheduler.clear();
     this.messages = [];
     this.dismissedQuestions = new Set();
     this.answeredQuestions = new Set();
@@ -609,7 +677,11 @@ export class CustodianSessionStore {
     this.input = "";
     this.wizardValue = undefined;
     this.wizardSecretVisible = false;
-    this.sensitive = this.wizardInputPending = this.questionReplyUncertain = false;
+    this.sensitive =
+      this.wizardInputPending =
+      this.wizardSettling =
+      this.questionReplyUncertain =
+        false;
     this.earlierBoundaryAfterId = null;
   }
 
@@ -634,6 +706,10 @@ export class CustodianSessionStore {
   private async requestReply(
     client: GatewayBrowserClient,
     params: SystemAgentChatParams,
+    options?: {
+      pollStepId?: string;
+      qrPresentationGeneration?: number;
+    },
   ): Promise<eventNudgeState.CustodianSendOutcome> {
     const context = this.context;
     if (!context) {
@@ -649,15 +725,19 @@ export class CustodianSessionStore {
     this.requestAbort?.abort();
     const requestAbort = new AbortController();
     this.requestAbort = requestAbort;
+    const pollStepId = options?.pollStepId;
+    const settlingStepId = pollStepId;
     const epoch = ++this.requestEpoch;
     let delivery: eventNudgeState.CustodianSendDelivery = "unsent";
-    this.sending = true;
-    this.error = null;
-    if (hasCustodianUserInput(params)) {
-      this.setupIssue = null;
+    if (!pollStepId) {
+      this.sending = true;
+      this.error = null;
+      if (hasCustodianUserInput(params)) {
+        this.setupIssue = null;
+      }
+      this.retryParams = params;
+      this.emit();
     }
-    this.retryParams = params;
-    this.emit();
     try {
       const result = await client.request<SystemAgentChatResult>("openclaw.chat", params, {
         timeoutMs: SYSTEM_AGENT_CHAT_TIMEOUT_MS,
@@ -669,10 +749,47 @@ export class CustodianSessionStore {
         return "sent";
       }
       this.sessionId = result.sessionId;
+      if (pollStepId) {
+        // An authoritative QR observation supersedes a prior poll failure.
+        this.error = null;
+      }
+      if (pollStepId && result.step?.type === "qr" && result.step.id === pollStepId) {
+        if (
+          options.qrPresentationGeneration !== undefined &&
+          !this.qrScheduler.isPollPresentationCurrent(pollStepId, options.qrPresentationGeneration)
+        ) {
+          // Expiry retired the credential while this request was in flight. A later poll can
+          // recover authoritative state, but this stale response must not resurrect QR bytes.
+          this.messages = scrubCustodianQrSteps(this.messages, pollStepId);
+          this.qrScheduler.schedulePoll(client, pollStepId);
+          return "sent";
+        }
+        this.messages = replaceCustodianQrStep(this.messages, result.step);
+        this.wizardInputPending = result.wizardInputPending === true;
+        this.wizardSettling = result.wizardSettling === true;
+        this.qrScheduler.scheduleStep(client, result.step);
+        return "sent";
+      }
+      if (settlingStepId && result.wizardSettling === true && result.step === undefined) {
+        // An externally owned QR can outlive its presentation. Keep observations short and
+        // poll again so Cancel remains responsive while the owner settles in the background.
+        this.messages = scrubCustodianQrSteps(this.messages, settlingStepId);
+        this.questionReplyUncertain = false;
+        this.wizardInputPending = false;
+        this.wizardSettling = true;
+        this.qrScheduler.schedulePoll(client, settlingStepId);
+        return "sent";
+      }
+      this.qrScheduler.clear();
+      if (pollStepId) {
+        this.messages = scrubCustodianQrSteps(this.messages, pollStepId);
+        this.questionReplyUncertain = false;
+        this.abandonedTurnOutcomeUnknown = false;
+      }
       this.sensitive = result.sensitive === true;
       this.wizardInputPending = result.wizardInputPending === true;
-      this.retryParams = null;
-      this.setupIssue = null;
+      this.wizardSettling = result.wizardSettling === true;
+      [this.retryParams, this.setupIssue] = [null, null];
       const step = result.step ?? null;
       const question = step ? null : parseCustodianQuestion(result.question);
       this.wizardValue = step ? initialCustodianWizardValue(step) : undefined;
@@ -680,6 +797,9 @@ export class CustodianSessionStore {
       const silentReply = SILENT_REPLY_PATTERN.test(result.reply);
       if (!silentReply || question || step) {
         this.appendAssistant(silentReply ? "" : result.reply, question, step);
+      }
+      if (step?.type === "qr") {
+        this.qrScheduler.scheduleStep(client, step);
       }
       if (result.action === "open-agent") {
         let sessionKey = context.gateway.snapshot.sessionKey?.trim();
@@ -712,6 +832,21 @@ export class CustodianSessionStore {
       }
       return "sent";
     } catch (error) {
+      if (pollStepId) {
+        if (epoch === this.requestEpoch && client === this.activeClient) {
+          if (isCustodianSessionInvalidatedError(error)) {
+            this.qrScheduler.clear();
+            this.messages = scrubCustodianQrSteps(this.messages, pollStepId);
+            this.rotateVolatileSession(client, this.currentSessionVariant());
+            return "sent";
+          }
+          const step = findCustodianQrStep(this.messages, pollStepId);
+          if (step) {
+            this.qrScheduler.schedulePoll(client, step.id);
+          }
+        }
+        return eventNudgeState.classifyCustodianSendFailure(error, delivery);
+      }
       if (epoch === this.requestEpoch && client === this.activeClient) {
         this.error = custodianErrorMessage(error);
         const details =
@@ -737,7 +872,7 @@ export class CustodianSessionStore {
       if (this.requestAbort === requestAbort) {
         this.requestAbort = null;
       }
-      if (epoch === this.requestEpoch) {
+      if (!pollStepId && epoch === this.requestEpoch) {
         this.sending = false;
       }
       this.emit();

@@ -8,24 +8,20 @@ const options = [
   { label: "Twitch", value: "twitch" },
 ];
 
-type TestStepPatch =
-  | { type?: "select"; initialValue?: unknown }
-  | { type: "multiselect"; initialValue?: unknown }
-  | { type: "confirm"; initialValue?: unknown }
-  | { type: "text"; initialValue?: unknown }
-  | { type: "action"; initialValue?: unknown };
+type NonQrWizardStep = Exclude<WizardStep, { type: "qr" }>;
 
-function step(patch: TestStepPatch): WizardStep {
-  switch (patch.type) {
-    case "multiselect":
-      return { id: "step", options, ...patch };
-    case "confirm":
-    case "text":
-    case "action":
-      return { id: "step", ...patch };
-    default:
-      return { id: "step", type: "select", options, ...patch };
-  }
+function step(patch: Partial<NonQrWizardStep>): NonQrWizardStep {
+  return { id: "step", type: "select", options, ...patch };
+}
+
+function qrStep(): WizardStep {
+  return {
+    id: "step",
+    type: "qr",
+    executor: "client",
+    qrDataUrl: "data:image/png;base64,AAAA",
+    expiresInMs: 60_000,
+  };
 }
 
 describe("Custodian rich wizard answers", () => {
@@ -59,6 +55,8 @@ describe("Custodian rich wizard answers", () => {
       answer: { stepId: "step" },
       display: "Continue",
     });
+    expect(custodianWizardSubmission(qrStep(), undefined)).toBeNull();
+    expect(custodianWizardSubmission(qrStep(), false)).toBeNull();
   });
 
   it("copies multiselect defaults and rejects values outside the step", () => {
