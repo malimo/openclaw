@@ -159,6 +159,11 @@ export async function linkSignalCliAccount(params: {
     resolveCompletion();
     await displayPromise;
 
+    if (associatedAccount) {
+      // signal-cli prints the account only after finishDeviceLink succeeds. A late client
+      // cancellation must not turn that durable success into a second linking attempt.
+      return { ok: true, associatedAccount };
+    }
     if (result.code === 0 && result.termination === "exit") {
       if (!linkUriSeen) {
         return {
@@ -166,15 +171,10 @@ export async function linkSignalCliAccount(params: {
           error: "signal-cli link finished without producing a device-link QR code.",
         };
       }
-      if (!associatedAccount) {
-        return {
-          ok: false,
-          error: "signal-cli link finished without reporting the associated account.",
-        };
-      }
-      // signal-cli prints the account only after finishDeviceLink succeeds. A late client
-      // cancellation must not turn that durable success into a second linking attempt.
-      return { ok: true, associatedAccount };
+      return {
+        ok: false,
+        error: "signal-cli link finished without reporting the associated account.",
+      };
     }
     if (displayError) {
       return { ok: false, error: displayError };

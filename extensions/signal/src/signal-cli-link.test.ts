@@ -239,6 +239,32 @@ describe("linkSignalCliAccount", () => {
     });
   });
 
+  it("preserves a successful link when QR presentation cancels the settling process", async () => {
+    const command = createDeferredCommand();
+    let rejectPresentation!: (error: Error) => void;
+    const presentation = new Promise<void>((_resolve, reject) => {
+      rejectPresentation = reject;
+    });
+    const resultPromise = linkSignalCliAccount({
+      cliPath: "signal-cli",
+      onLinkUri: async () => await presentation,
+    });
+
+    emitStdoutLine("sgnl://linkdevice?uuid=test&pub_key=test");
+    await vi.waitFor(() => expect(rejectPresentation).toBeTypeOf("function"));
+    emitStdoutLine("Associated with: +15555550123");
+    rejectPresentation(new Error("client disconnected"));
+    await vi.waitFor(() => expect(commandOptions().signal.aborted).toBe(true));
+    command.resolve(
+      commandResult({ code: null, signal: "SIGTERM", killed: true, termination: "signal" }),
+    );
+
+    await expect(resultPromise).resolves.toEqual({
+      ok: true,
+      associatedAccount: "+15555550123",
+    });
+  });
+
   it("bounds signal-cli errors and rejects incomplete success output", async () => {
     const failedCommand = createDeferredCommand();
     const failurePromise = linkSignalCliAccount({
