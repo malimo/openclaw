@@ -1,4 +1,5 @@
 import type {
+  SystemAgentChatQuestion,
   SystemAgentWizardCancel,
   WizardAnswer,
   WizardStep as ProtocolWizardStep,
