@@ -110,7 +110,7 @@ describe("Signal managed setup validation wiring", () => {
     );
   });
 
-  it("keeps the original account identity when the generic input changes A to B", async () => {
+  it("validates an account replacement on a distinct persisted port", async () => {
     const originalCfg: OpenClawConfig = {
       channels: {
         signal: {
@@ -129,7 +129,7 @@ describe("Signal managed setup validation wiring", () => {
       },
     };
 
-    await runSetupWizardFinalize({
+    const finalized = await runSetupWizardFinalize({
       finalize: signalSetupWizard.finalize,
       cfg: changedCfg,
       credentialValues,
@@ -142,7 +142,11 @@ describe("Signal managed setup validation wiring", () => {
         account: "+15555550124",
         reusableConfiguredAccount: "+15555550123",
         reusableConfiguredTransport: expect.any(String),
+        transport: expect.objectContaining({ httpPort: 8081 }),
       }),
+    );
+    expect(finalized?.cfg?.channels?.signal?.transport).toEqual(
+      expect.objectContaining({ httpPort: 8081 }),
     );
   });
 

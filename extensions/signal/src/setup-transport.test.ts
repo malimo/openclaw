@@ -267,6 +267,42 @@ describe("prepareSignalManagedNativeTransport", () => {
     });
   });
 
+  it("reserves an inherited target port while replacing its account identity", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            work: {
+              account: "+15555550124",
+              transport: {
+                kind: "managed-native",
+                url: "http://127.0.0.1:8080",
+                httpPort: 8080,
+              },
+            },
+            personal: {
+              account: "+15555550123",
+              transport: { kind: "managed-native", httpPort: 8081 },
+            },
+          },
+        },
+      },
+    } as const;
+
+    expect(
+      prepareSignalManagedNativeTransport({
+        cfg: cfg as never,
+        accountId: "work",
+        reserveTargetAccountPorts: true,
+      }),
+    ).toEqual({
+      kind: "managed-native",
+      url: "http://127.0.0.1:8082",
+      httpHost: "127.0.0.1",
+      httpPort: 8082,
+    });
+  });
+
   it("keeps an aligned managed connection URL on the allocated bind port", () => {
     const cfg = {
       channels: {

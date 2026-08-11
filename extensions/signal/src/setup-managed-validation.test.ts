@@ -208,26 +208,28 @@ describe("probeManagedSignalSetup", () => {
     expect(mocks.spawnDaemon).not.toHaveBeenCalled();
   });
 
-  it("never reuses the old daemon after the selected account changes", async () => {
+  it("validates a replacement account on its newly allocated port", async () => {
     const changedAccount = "+15555550124";
+    const replacementTransport = { ...transport, httpPort: 8081 };
     const cfg = {
       channels: {
         signal: { accounts: { work: { account: changedAccount, transport } } },
       },
     } as OpenClawConfig;
-    mocks.assertBindAvailable.mockRejectedValueOnce(new Error("address in use (EADDRINUSE)"));
 
     await expect(
       probeManagedSignalSetup({
-        ...createParams(cfg, transport, account),
+        ...createParams(cfg, replacementTransport, account),
         account: changedAccount,
       }),
-    ).resolves.toMatchObject({
-      ok: false,
-      error: expect.stringContaining("EADDRINUSE"),
+    ).resolves.toMatchObject({ ok: true });
+    expect(mocks.assertBindAvailable).toHaveBeenCalledWith({
+      httpHost: "127.0.0.1",
+      httpPort: 8081,
     });
-    expect(mocks.probeTransport).not.toHaveBeenCalled();
-    expect(mocks.spawnDaemon).not.toHaveBeenCalled();
+    expect(mocks.spawnDaemon).toHaveBeenCalledWith(
+      expect.objectContaining({ account: changedAccount, httpPort: 8081 }),
+    );
   });
 
   it("spawns the selected account on the final port and always stops it", async () => {

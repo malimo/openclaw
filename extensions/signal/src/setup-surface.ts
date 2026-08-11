@@ -307,9 +307,17 @@ export const signalSetupWizard: ChannelSetupWizard = {
     if (!account) {
       throw new Error("Signal managed setup requires an account number before validation.");
     }
+    const reusableConfiguredAccount = normalizeSignalAccountInput(
+      params.credentialValues[signalSetupStateKeys.managedReuseAccount],
+    );
     const transport = prepareSignalManagedNativeTransport({
       cfg: params.cfg,
       accountId: params.accountId,
+      // The old account keeps its daemon port until whole-channel reload drains it. Treat an
+      // identity replacement as a new bind so setup validates the exact transport it persists.
+      reserveTargetAccountPorts: Boolean(
+        reusableConfiguredAccount && reusableConfiguredAccount !== account,
+      ),
       overrides:
         typeof params.credentialValues.cliPath === "string"
           ? { cliPath: params.credentialValues.cliPath }
@@ -321,8 +329,7 @@ export const signalSetupWizard: ChannelSetupWizard = {
         accountId: params.accountId,
         transport,
         account,
-        reusableConfiguredAccount:
-          params.credentialValues[signalSetupStateKeys.managedReuseAccount],
+        reusableConfiguredAccount,
         reusableConfiguredTransport:
           params.credentialValues[signalSetupStateKeys.managedReuseTransport],
         runtime: params.runtime,

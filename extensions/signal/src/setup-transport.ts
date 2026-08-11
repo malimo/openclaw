@@ -156,6 +156,7 @@ export function prepareSignalManagedNativeTransport(params: {
   cfg: OpenClawConfig;
   accountId: string;
   overrides?: Omit<SignalManagedNativeTransport, "kind">;
+  reserveTargetAccountPorts?: boolean;
 }): SignalManagedNativeTransport {
   const existing = resolveConfiguredSignalTransport(params.cfg, params.accountId);
   const existingManaged = existing?.kind === "managed-native" ? existing : undefined;
@@ -221,7 +222,7 @@ export function prepareSignalManagedNativeTransport(params: {
   const targetAccountId = normalizeAccountId(params.accountId);
   const reservedPorts = new Set<number>();
   for (const [accountId, accountPorts] of portsByAccountId) {
-    if (accountId === targetAccountId) {
+    if (accountId === targetAccountId && !params.reserveTargetAccountPorts) {
       continue;
     }
     for (const httpPort of accountPorts) {
