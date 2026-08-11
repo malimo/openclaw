@@ -316,6 +316,12 @@ describe("signalAccountCheck", () => {
 
   it("accepts a selected account exposed by a multi-account daemon", async () => {
     const baseUrl = await withSignalServer(async (req, res) => {
+      if (req.method === "GET") {
+        expect(req.url).toBe("/api/v1/events?account=%2B15555550124");
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end();
+        return;
+      }
       expect(JSON.parse(await readRequestBody(req))).toEqual({
         jsonrpc: "2.0",
         method: "listAccounts",
@@ -335,6 +341,33 @@ describe("signalAccountCheck", () => {
       ok: true,
       status: 200,
       error: null,
+    });
+  });
+
+  it("rejects an account whose native receive stream cannot open", async () => {
+    const baseUrl = await withSignalServer(async (req, res) => {
+      if (req.method === "GET") {
+        expect(req.url).toBe("/api/v1/events?account=%2B15555550124");
+        res.writeHead(503, { "Content-Type": "text/plain" });
+        res.end("receive unavailable");
+        return;
+      }
+      await readRequestBody(req);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          result: [{ number: "+15555550124" }],
+          id: "test-id",
+        }),
+      );
+    });
+
+    await expect(signalAccountCheck(baseUrl, 10_000, "+15555550124")).resolves.toEqual({
+      ok: false,
+      status: null,
+      error:
+        "Signal native receive stream is unavailable: Signal SSE failed (503 Service Unavailable)",
     });
   });
 
@@ -379,7 +412,13 @@ describe("signalAccountCheck", () => {
   });
 
   it("accepts a bound single-account daemon when its owner supplied the account", async () => {
-    const baseUrl = await withSignalServer((_req, res) => {
+    const baseUrl = await withSignalServer((req, res) => {
+      if (req.method === "GET") {
+        expect(req.url).toBe("/api/v1/events?account=%2B15555550124");
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end();
+        return;
+      }
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({

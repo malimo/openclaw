@@ -382,11 +382,10 @@ describe("Signal existing-server setup", () => {
     expect(cfg.channels?.signal?.accounts?.work?.account).toBe("+15555550123");
   });
 
-  it("does not persist an unverified server", async () => {
+  it("does not persist a native server whose receive stream is unavailable", async () => {
     mocks.probeSignalTransport.mockResolvedValue({
       ok: false,
-      failureKind: "unverifiable-single-account",
-      error: "not ready",
+      error: "Signal native receive stream is unavailable: HTTP 503",
     });
     const cfg: OpenClawConfig = {
       channels: { signal: { account: "+15555550123" } },
@@ -408,7 +407,10 @@ describe("Signal existing-server setup", () => {
 
     expect(cfg.channels?.signal?.transport).toBeUndefined();
     expect(queued.confirm).not.toHaveBeenCalled();
-    expect(queued.note).toHaveBeenCalledWith(expect.stringContaining("not ready"), "Signal setup");
+    expect(queued.note).toHaveBeenCalledWith(
+      expect.stringContaining("receive stream is unavailable"),
+      "Signal setup",
+    );
   });
 
   it("does not persist an unverified alias of a configured managed daemon", async () => {

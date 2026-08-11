@@ -289,13 +289,13 @@ export async function signalAccountCheck(
         error: `Signal account ${account} is not available on this server.`,
       };
     }
-    return { ok: true, status: 200, error: null };
+    return await signalReceiveCheck(baseUrl, timeoutMs, account);
   } catch (error) {
     if (error instanceof SignalRpcRequestError && error.rpcCode === -32601) {
       if (accountBinding === "owner-known-bound-account") {
         // A daemon owner binds the process to this account before probing. Single-account
         // signal-cli omits listAccounts, so process ownership is the identity proof here.
-        return { ok: true, status: 200, error: null };
+        return await signalReceiveCheck(baseUrl, timeoutMs, account);
       }
       return {
         ok: false,
@@ -413,6 +413,27 @@ function openSignalEventStream(
     request.on("error", rejectOnce);
     request.end();
   });
+}
+
+async function signalReceiveCheck(
+  baseUrl: string,
+  timeoutMs: number,
+  account: string,
+): Promise<SignalTransportProbeResult> {
+  const url = resolveSignalEndpointUrl(baseUrl, "/api/v1/events");
+  url.searchParams.set("account", account);
+  try {
+    const { response, cleanup } = await openSignalEventStream(url, undefined, timeoutMs);
+    response.destroy();
+    cleanup();
+    return { ok: true, status: 200, error: null };
+  } catch (error) {
+    return {
+      ok: false,
+      status: null,
+      error: `Signal native receive stream is unavailable: ${formatErrorMessage(error)}`,
+    };
+  }
 }
 
 export async function streamSignalEvents(params: {
