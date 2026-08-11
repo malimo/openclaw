@@ -25,6 +25,7 @@ import {
   MAX_PAYLOAD_BYTES,
   MAX_PREAUTH_PAYLOAD_BYTES,
 } from "../server-constants.js";
+import { disposeSystemAgentSessionsForOwner } from "../server-methods/system-agent-session-lifecycle.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import {
@@ -510,6 +511,13 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       if (connectionKind === "gateway") {
         const context = buildRequestContext();
+        void disposeSystemAgentSessionsForOwner({
+          sessions: context.systemAgentSessions,
+          ownerKey: `connection:${connId}`,
+          approvalManager: context.systemAgentApprovalManager,
+        }).catch((error) => {
+          logGateway.warn(`OpenClaw session cleanup failed: ${formatError(error)}`);
+        });
         cleanupTalkConnection(connId, logGateway);
         context.unsubscribeAllSessionEvents(connId);
         // Detach (or, with a zero grace period, kill) any PTY shells this

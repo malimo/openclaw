@@ -9,11 +9,13 @@ function makeEngine() {
   const handle = vi.fn();
   const answerWizard = vi.fn();
   const cancelWizard = vi.fn();
+  const pollStep = vi.fn();
   return {
     answerWizard,
     cancelWizard,
     handle,
-    engine: { answerWizard, cancelWizard, handle },
+    pollStep,
+    engine: { answerWizard, cancelWizard, handle, pollStep },
   };
 }
 
@@ -25,7 +27,7 @@ describe("system-agent chat input", () => {
         message: "5",
         wizardAnswer: { stepId: "channel", value: "twitch" },
       },
-      error: "Send either message or wizardAnswer, not both.",
+      error: "Send exactly one of message, wizardAnswer, wizardCancel, or pollStepId.",
     },
     {
       input: {
@@ -33,7 +35,7 @@ describe("system-agent chat input", () => {
         wizardAnswer: { stepId: "secret", value: "not-forwarded" },
         delegation: { agentId: "main", sessionKey: "agent:main:main" },
       },
-      error: "Delegated OpenClaw sessions cannot submit structured wizard answers.",
+      error: "Delegated OpenClaw sessions cannot answer or poll structured wizard steps.",
     },
     {
       input: {
@@ -41,7 +43,7 @@ describe("system-agent chat input", () => {
         wizardAnswer: { stepId: "channel", value: "twitch" },
         reset: true,
       },
-      error: "A wizard answer cannot reset its OpenClaw chat session.",
+      error: "A wizard answer or poll cannot reset its OpenClaw chat session.",
     },
     {
       input: {
@@ -49,7 +51,7 @@ describe("system-agent chat input", () => {
         message: "cancel",
         wizardCancel: { stepId: "channel" },
       },
-      error: "Send wizardCancel without a message or wizardAnswer.",
+      error: "Send exactly one of message, wizardAnswer, wizardCancel, or pollStepId.",
     },
     {
       input: {
@@ -57,7 +59,7 @@ describe("system-agent chat input", () => {
         wizardAnswer: { stepId: "channel", value: "twitch" },
         wizardCancel: { stepId: "channel" },
       },
-      error: "Send wizardCancel without a message or wizardAnswer.",
+      error: "Send exactly one of message, wizardAnswer, wizardCancel, or pollStepId.",
     },
     {
       input: {
@@ -116,6 +118,25 @@ describe("system-agent chat input", () => {
     expect(handle).not.toHaveBeenCalled();
   });
 
+  it("routes a passive wizard poll without answering the step", async () => {
+    const { engine, answerWizard, pollStep } = makeEngine();
+    pollStep.mockResolvedValue({
+      text: "Setup is still finishing this QR operation.",
+      action: "none",
+      wizardSettling: true,
+    });
+
+    await expect(
+      runSystemAgentChatInput({
+        engine,
+        input: { sessionId: "s1", pollStepId: "qr-step" },
+      }),
+    ).resolves.toMatchObject({ wizardSettling: true });
+
+    expect(pollStep).toHaveBeenCalledWith("qr-step");
+    expect(answerWizard).not.toHaveBeenCalled();
+  });
+
   it("preserves the enriched wizard step in the gateway result", () => {
     expect(
       buildSystemAgentChatResult({
@@ -137,5 +158,18 @@ describe("system-agent chat input", () => {
       action: "none",
       step: { id: "channel", type: "select" },
     });
+  });
+
+  it("projects wizard settlement state", () => {
+    expect(
+      buildSystemAgentChatResult({
+        sessionId: "s1",
+        reply: {
+          text: "Setup is still finishing this QR operation.",
+          action: "none",
+          wizardSettling: true,
+        },
+      }),
+    ).toMatchObject({ wizardSettling: true });
   });
 });

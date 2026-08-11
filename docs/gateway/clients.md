@@ -136,10 +136,33 @@ snapshot, so re-read them on every reconnect.
 
 ### Present system-agent QR codes
 
-`GATEWAY_CLIENT_CAPS.SYSTEM_AGENT_QR_CODE` and the QR wizard-step shape are
-reserved until system-agent QR production and Gateway projection are both
-available. Clients should not advertise this capability yet; the contract alone
-does not make existing Gateway methods emit QR steps.
+Advertise `GATEWAY_CLIENT_CAPS.SYSTEM_AGENT_QR_CODE` only when the client can
+render a QR image. A capable `openclaw.chat` session can then receive a QR
+`step` through the same wizard-step contract used for other setup controls:
+
+```json
+{
+  "step": {
+    "id": "setup-qr",
+    "type": "qr",
+    "title": "Scan QR code",
+    "message": "Scan the code to continue.",
+    "qrDataUrl": "data:image/png;base64,...",
+    "expiresInMs": 120000,
+    "executor": "client"
+  }
+}
+```
+
+The dependency owns completion of a QR step. Do not send `wizardAnswer` for
+it. Keep the image visible for at most `expiresInMs`, and observe progress by
+calling `openclaw.chat` with the same `sessionId` and `pollStepId: step.id`.
+A response with `wizardSettling: true` means the owner is still finishing;
+continue polling with bounded backoff until the next step or terminal reply.
+
+QR capability is bound to the in-memory session. If reconnect negotiation
+changes it, the Gateway returns typed session-invalidated details. Discard the
+old QR and call `openclaw.chat` with `reset: true` before continuing.
 
 ## Recover state after reconnect
 

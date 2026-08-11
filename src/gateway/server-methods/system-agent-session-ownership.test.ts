@@ -38,6 +38,8 @@ vi.mock("../../system-agent/greeting.js", () => ({
 type FakeEngine = {
   answerWizard: ReturnType<typeof vi.fn>;
   cancelWizard: ReturnType<typeof vi.fn>;
+  pollStep: ReturnType<typeof vi.fn>;
+  hasPendingQrCode: ReturnType<typeof vi.fn>;
   handle: ReturnType<typeof vi.fn>;
   seedHistory: ReturnType<typeof vi.fn>;
   historyLength: ReturnType<typeof vi.fn>;
@@ -57,6 +59,10 @@ function makeEngine(): FakeEngine {
     cancelWizard: vi.fn(async () => {
       throw new SystemAgentWizardAnswerError("No hosted wizard is awaiting cancellation.");
     }),
+    pollStep: vi.fn(async () => {
+      throw new SystemAgentWizardAnswerError("The hosted wizard step is no longer active.");
+    }),
+    hasPendingQrCode: vi.fn(() => false),
     handle: vi.fn(async () => ({ text: "did the thing", action: "none" })),
     seedHistory: vi.fn(),
     historyLength: vi.fn(() => 0),
@@ -112,12 +118,14 @@ function makeContext(sessions: Map<string, SystemAgentChatSession>): GatewayRequ
 function seededSession(params?: {
   engine?: FakeEngine;
   ownerKey?: string;
+  supportsQrCode?: boolean;
 }): SystemAgentChatSession {
   return {
     engine: params?.engine ?? makeEngine(),
     welcome: "welcome text",
     lastUsedAt: 1,
     ownerKey: params?.ownerKey ?? "device:device-test",
+    supportsQrCode: params?.supportsQrCode ?? false,
   } as unknown as SystemAgentChatSession;
 }
 
@@ -154,6 +162,28 @@ afterEach(() => {
 });
 
 describe("openclaw.chat session ownership", () => {
+  it("invalidates a session when reconnect negotiation changes QR support", async () => {
+    const engine = makeEngine();
+    const sessions = new Map<string, SystemAgentChatSession>([
+      ["qr-session", seededSession({ engine, supportsQrCode: true })],
+    ]);
+
+    const result = await callChat(makeContext(sessions), {
+      sessionId: "qr-session",
+      message: "status",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        details: { code: "system_agent_session_invalidated" },
+      },
+    });
+    expect(engine.handle).not.toHaveBeenCalled();
+    expect(engine.dispose).not.toHaveBeenCalled();
+  });
+
   it("binds a new non-delegated session and rejects another principal", async () => {
     const sessions = new Map<string, SystemAgentChatSession>();
     const context = makeContext(sessions);

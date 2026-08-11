@@ -56,6 +56,12 @@ describe("OpenClaw chat params protocol", () => {
     ).toBe(false);
   });
 
+  it("accepts a passive wizard step poll", () => {
+    expect(validateSystemAgentChatParams({ sessionId: "session-1", pollStepId: "setup-qr" })).toBe(
+      true,
+    );
+  });
+
   it("rejects unsafe page ids and unknown context fields", () => {
     expect(validateSystemAgentChatParams({ ...base, context: { page: "channels?tab=all" } })).toBe(
       false,

@@ -87,6 +87,7 @@ function discardableSessions(dispose: () => Promise<void>): Map<string, SystemAg
         welcome: "welcome text",
         lastUsedAt: 1,
         ownerKey: "device:device-test",
+        supportsQrCode: false,
       },
     ],
   ]) as unknown as Map<string, SystemAgentChatSession>;

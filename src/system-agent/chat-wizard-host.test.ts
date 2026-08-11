@@ -80,6 +80,44 @@ describe("SystemAgentChatEngine wizard", () => {
     expect(done.step).toBeUndefined();
   });
 
+  it("polls owner completion without answering the QR step", async () => {
+    let settleOwner!: () => void;
+    const owner = new Promise<void>((resolve) => {
+      settleOwner = resolve;
+    });
+    let releaseRunner!: () => void;
+    const runnerGate = new Promise<void>((resolve) => {
+      releaseRunner = resolve;
+    });
+    let runnerReachedGate = false;
+    const engine = createQrEngine(async (_channel, prompter) => {
+      await prompter.qrCode?.({
+        title: "Link a device",
+        message: "Scan this QR code and approve the device.",
+        text: QR_TEXT,
+        dismissed: owner,
+      });
+      runnerReachedGate = true;
+      await runnerGate;
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    const stepId = expectDefined(prompt.step, "QR step").id;
+    settleOwner();
+    await vi.waitFor(() => expect(runnerReachedGate).toBe(true));
+
+    const settling = await engine.pollStep(stepId);
+    expect(settling).toMatchObject({ wizardSettling: true });
+    expect(settling).not.toHaveProperty("step");
+
+    releaseRunner();
+    await vi.waitFor(() => expect(engine.hasPendingQrCode()).toBe(false));
+    const completed = await engine.pollStep(stepId);
+    expect(completed.text).toContain("telegram is configured");
+    expect(completed).not.toHaveProperty("wizardSettling");
+    expect(completed).not.toHaveProperty("step");
+  });
+
   it.each([
     {
       name: "chat command",

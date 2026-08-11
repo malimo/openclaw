@@ -14,7 +14,7 @@ export const SystemAgentWizardCancelSchema = closedObject({
  * OpenClaw chat lets clients (macOS app onboarding, future UIs) hold the
  * setup/repair conversation over the gateway. The gateway live-tests the
  * configured inference route before creating a session. Omitting `message`
- * returns the welcome/greeting for a verified fresh session without input.
+ * returns the welcome/greeting unless `pollStepId` observes an active wizard step.
  */
 export const SystemAgentChatParamsSchema = closedObject({
   sessionId: NonEmptyString,
@@ -24,6 +24,8 @@ export const SystemAgentChatParamsSchema = closedObject({
   wizardAnswer: Type.Optional(WizardAnswerSchema),
   /** Direct client control for cancelling the currently rendered hosted wizard. */
   wizardCancel: Type.Optional(SystemAgentWizardCancelSchema),
+  /** Observe one active wizard step without answering it. */
+  pollStepId: Type.Optional(NonEmptyString),
   /** Seeds a purpose-specific first greeting for a fresh conversation. */
   welcomeVariant: Type.Optional(
     Type.Union([Type.Literal("onboarding"), Type.Literal("new-agent")]),
@@ -86,6 +88,8 @@ export const SystemAgentChatResultSchema = closedObject({
   sensitive: Type.Optional(Type.Boolean()),
   /** The hosted wizard will consume the next message as its current step answer. */
   wizardInputPending: Type.Optional(Type.Boolean()),
+  /** The hosted wizard is settling external work and has no answerable step. */
+  wizardSettling: Type.Optional(Type.Boolean()),
   action: Type.Union([
     Type.Literal("none"),
     // The user asked to talk to their agent; clients should move to their

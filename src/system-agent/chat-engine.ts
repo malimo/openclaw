@@ -74,6 +74,7 @@ export class SystemAgentChatEngine {
   private disposed = false;
   private disposal: Promise<void> | null = null;
   private persistentApplySettlement: Promise<void> | null = null;
+  private retainedPollReplies = new Map<string, SystemAgentChatReply>();
 
   constructor(
     private readonly options: SystemAgentChatEngineOptions,
@@ -201,6 +202,65 @@ export class SystemAgentChatEngine {
     });
     this.turnQueue = turn.catch(() => undefined);
     return await turn;
+  }
+
+  /** Observe a passive wizard step while keeping its continuation in the turn queue. */
+  async pollStep(stepId: string): Promise<SystemAgentChatReply> {
+    this.assertActive();
+    const retained = this.retainedPollReplies.get(stepId);
+    if (retained) {
+      this.retainedPollReplies.delete(stepId);
+      if (retained.text) {
+        this.history.push({ role: "assistant", text: retained.text });
+      }
+      return { ...retained };
+    }
+    const observation = this.turnQueue.then(async () => {
+      this.assertActive();
+      const queuedRetained = this.retainedPollReplies.get(stepId);
+      if (queuedRetained) {
+        return { ...queuedRetained };
+      }
+      const result = await this.wizard.pollStep(stepId);
+      this.assertActive();
+      const reply = this.wizard.decorateReply({ text: result.text, action: "none" });
+      if (
+        reply.step === undefined &&
+        reply.wizardInputPending !== true &&
+        reply.wizardSettling !== true
+      ) {
+        this.retainedPollReplies.set(stepId, { ...reply });
+      }
+      return reply;
+    });
+    this.turnQueue = observation.catch(() => undefined);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      observation.then((reply) => ({ reply })),
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(resolve, 0);
+      }),
+    ]);
+    if (timer) {
+      clearTimeout(timer);
+    }
+    if (outcome) {
+      if (
+        outcome.reply.text &&
+        outcome.reply.step === undefined &&
+        outcome.reply.wizardInputPending !== true &&
+        outcome.reply.wizardSettling !== true
+      ) {
+        this.history.push({ role: "assistant", text: outcome.reply.text });
+        this.retainedPollReplies.delete(stepId);
+      }
+      return outcome.reply;
+    }
+    return {
+      text: "Setup is still finishing this QR operation.",
+      action: "none",
+      wizardSettling: true,
+    };
   }
 
   async answerWizard(answer: WizardAnswer): Promise<SystemAgentChatReply> {

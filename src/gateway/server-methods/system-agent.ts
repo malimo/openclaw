@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 // OpenClaw gateway methods host the setup/repair conversation for clients.
 import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   buildSystemAgentInferenceUnavailableErrorDetails,
   buildSystemAgentSessionInvalidatedErrorDetails,
   ErrorCodes,
@@ -62,6 +66,7 @@ import {
   getSystemAgentChatInputError,
   runSystemAgentChatInput,
 } from "./system-agent-chat-turn.js";
+import { assertSystemAgentSessionStoreActive } from "./system-agent-session-lifecycle.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -154,13 +159,27 @@ function resolveSystemAgentSessionOwnerKey(params: {
 async function evictOldestSession(
   sessions: Map<string, SystemAgentChatSession>,
   context: GatewayRequestContext,
-): Promise<void> {
+): Promise<boolean> {
   if (sessions.size < MAX_SYSTEM_AGENT_SESSIONS) {
-    return;
+    return true;
   }
+  const protectedQrSessions = new Map<string, { key: string; lastUsedAt: number }>();
+  for (const [key, session] of sessions) {
+    if (!session.engine.hasPendingQrCode()) {
+      continue;
+    }
+    const current = protectedQrSessions.get(session.ownerKey);
+    if (!current || session.lastUsedAt >= current.lastUsedAt) {
+      protectedQrSessions.set(session.ownerKey, { key, lastUsedAt: session.lastUsedAt });
+    }
+  }
+  const protectedKeys = new Set([...protectedQrSessions.values()].map(({ key }) => key));
   let oldestKey: string | undefined;
   let oldestAt = Number.POSITIVE_INFINITY;
   for (const [key, session] of sessions) {
+    if (protectedKeys.has(key)) {
+      continue;
+    }
     if (session.lastUsedAt < oldestAt) {
       oldestAt = session.lastUsedAt;
       oldestKey = key;
@@ -171,9 +190,11 @@ async function evictOldestSession(
     if (oldest?.pendingApproval) {
       context.systemAgentApprovalManager?.expire(oldest.pendingApproval.id, "session-evicted");
     }
-    await oldest?.engine.dispose();
     sessions.delete(oldestKey);
+    await oldest?.engine.dispose();
+    return true;
   }
+  return false;
 }
 
 function persistEngineHistory(engine: SystemAgentChatSession["engine"], startIndex: number): void {
@@ -521,6 +542,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       // it, concurrent first messages can create competing engines and lose
       // conversation state when the later initializer replaces the first.
       await getSystemAgentSessionQueue(sessions).enqueue(sessionId, async () => {
+        assertSystemAgentSessionStoreActive(sessions);
+        const supportsQrCode = hasGatewayClientCap(
+          client?.connect.caps,
+          GATEWAY_CLIENT_CAPS.SYSTEM_AGENT_QR_CODE,
+        );
         const ownerKey = resolveSystemAgentSessionOwnerKey({
           delegation: params.delegation,
           client,
@@ -538,7 +564,21 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           respond(
             false,
             undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw session belongs to another caller."),
+            errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw session belongs to another caller.", {
+              details: buildSystemAgentSessionInvalidatedErrorDetails(),
+            }),
+          );
+          return;
+        }
+        if (boundSession && !params.reset && boundSession.supportsQrCode !== supportsQrCode) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "OpenClaw session capabilities changed; reset the session before continuing.",
+              { details: buildSystemAgentSessionInvalidatedErrorDetails() },
+            ),
           );
           return;
         }
@@ -556,7 +596,12 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           await existing?.engine.dispose();
         }
         let session = sessions.get(sessionId);
-        if ((params.wizardAnswer !== undefined || params.wizardCancel !== undefined) && !session) {
+        if (
+          (params.wizardAnswer !== undefined ||
+            params.wizardCancel !== undefined ||
+            params.pollStepId !== undefined) &&
+          !session
+        ) {
           respond(
             false,
             undefined,
@@ -564,7 +609,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               ErrorCodes.INVALID_REQUEST,
               params.wizardCancel !== undefined
                 ? "No active OpenClaw chat session is awaiting that wizard cancel."
-                : "No active OpenClaw chat session is awaiting that wizard answer.",
+                : "No active OpenClaw chat session is awaiting that wizard step.",
               { details: buildSystemAgentSessionInvalidatedErrorDetails() },
             ),
           );
@@ -574,6 +619,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         const welcomeOnly =
           params.wizardAnswer === undefined &&
           params.wizardCancel === undefined &&
+          params.pollStepId === undefined &&
           (params.message === undefined || !params.message.trim());
         if (!session) {
           const { verifySystemAgentInferenceWithFallback } =
@@ -600,6 +646,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           // engine's setup path honors this via surface: "gateway".
           const engine = new SystemAgentChatEngine({
             surface: "gateway",
+            supportsQrCode,
             verifiedInference: inference.binding,
             operatorApprovalOnly: params.delegation !== undefined,
           });
@@ -645,8 +692,37 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
             return;
           }
+          if (!(await evictOldestSession(sessions, context))) {
+            await engine.dispose().catch(() => undefined);
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.UNAVAILABLE,
+                "OpenClaw chat capacity is reserved for active QR operations; try again after one completes.",
+                { retryable: true },
+              ),
+            );
+            return;
+          }
+          const connectionId = client?.connId?.trim();
+          if (
+            ownerKey.startsWith("connection:") &&
+            connectionId &&
+            context.isConnectionActive?.(connectionId) === false
+          ) {
+            await engine.dispose().catch(() => undefined);
+            respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.UNAVAILABLE, "OpenClaw connection is no longer active.", {
+                details: buildSystemAgentSessionInvalidatedErrorDetails(),
+              }),
+            );
+            return;
+          }
+          assertSystemAgentSessionStoreActive(sessions);
           persistEngineHistory(engine, welcomeHistoryStart);
-          await evictOldestSession(sessions, context);
           session = {
             engine,
             welcome,
@@ -656,6 +732,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               : {}),
             lastUsedAt: Date.now(),
             ownerKey,
+            supportsQrCode,
           };
           sessions.set(sessionId, session);
           if (welcomeOnly) {
@@ -678,6 +755,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         if (
           params.wizardAnswer === undefined &&
           params.wizardCancel === undefined &&
+          params.pollStepId === undefined &&
           (params.message === undefined || !params.message.trim())
         ) {
           respond(
@@ -712,7 +790,15 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         } catch (error) {
           persistEngineHistory(session.engine, historyStart);
           if (error instanceof SystemAgentWizardAnswerError) {
-            respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+            const options =
+              params.pollStepId === undefined
+                ? undefined
+                : { details: buildSystemAgentSessionInvalidatedErrorDetails() };
+            respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.INVALID_REQUEST, error.message, options),
+            );
             return;
           }
           if (!isSystemAgentInferenceUnavailableError(error)) {

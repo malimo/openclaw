@@ -218,6 +218,7 @@ function seededSession(overrides?: Partial<SystemAgentChatSession>): SystemAgent
     welcome: "welcome text",
     lastUsedAt: 1,
     ownerKey: "device:device-test",
+    supportsQrCode: false,
     ...overrides,
   };
 }
@@ -1054,6 +1055,27 @@ describe("openclaw.chat", () => {
     expect(disposeOldest).toHaveBeenCalledOnce();
     expect(sessions.size).toBe(8);
     expect([sessions.has("new-1"), sessions.has("new-2")]).toEqual([true, true]);
+  });
+
+  it("does not evict the newest active QR operation for each owner", async () => {
+    const sessions = new Map<string, SystemAgentChatSession>();
+    for (let index = 0; index < 8; index += 1) {
+      const protectedSession = seededSession({
+        lastUsedAt: index,
+        ownerKey: `device:owner-${index}`,
+      });
+      vi.spyOn(protectedSession.engine, "hasPendingQrCode").mockReturnValue(true);
+      sessions.set(`protected-${index}`, protectedSession);
+    }
+    stubEngineOverview();
+
+    const result = await callChat(makeContext(sessions), { sessionId: "new-session" });
+
+    expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+    expect(sessions.size).toBe(8);
+    expect([...sessions.keys()]).toEqual(
+      Array.from({ length: 8 }, (_value, index) => `protected-${index}`),
+    );
   });
 
   it("resets a session on request", async () => {
