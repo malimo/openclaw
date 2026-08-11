@@ -556,6 +556,26 @@ const setupWizard: ChannelSetupWizard = {
 `ChannelSetupWizard` also supports `textInputs`, `dmPolicy`, `allowFrom`, `groupAccess`, `prepare`, `finalize`, and more. See the Discord plugin's `src/setup-core.ts` for a full bundled example.
 
 <AccordionGroup>
+  <Accordion title="Owner-controlled QR prompts">
+    Setup code that already owns a QR-backed operation can pass its raw QR text and completion promise through `WizardPrompter.qrCode`. OpenClaw renders and transports a bounded image; the plugin remains the authority for success, failure, and cancellation.
+
+    ```typescript
+    const link = startDeviceLink();
+
+    if (prompter.qrCode) {
+      await prompter.qrCode({
+        title: "Link a device",
+        message: "Scan the code and approve the device.",
+        text: link.uri,
+        expiresAtMs: link.expiresAtMs,
+        dismissed: link.finished,
+      });
+    }
+    ```
+
+    `dismissed` is required and must settle with the producer operation. `qrCode(...)` returns `Promise<void>` only after that promise settles; there is no separate user Continue acknowledgement. Provide a non-QR fallback when `prompter.qrCode` is unavailable.
+
+  </Accordion>
   <Accordion title="Shared allowFrom prompts">
     For DM allowlist prompts that only need the standard `note -> prompt -> parse -> merge -> patch` flow, prefer the shared setup helpers from `openclaw/plugin-sdk/setup`: `createPromptParsedAllowFromForAccount(...)` and `createTopLevelChannelParsedAllowFromPrompt(...)`.
   </Accordion>

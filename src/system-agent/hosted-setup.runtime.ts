@@ -84,6 +84,7 @@ export async function runHostedChannelSetup(
   channel: string,
   prompter: WizardPrompter,
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+  abortSignal: AbortSignal,
   runtime?: RuntimeEnv,
 ): Promise<HostedSetupCompletion> {
   const {
@@ -92,10 +93,17 @@ export async function runHostedChannelSetup(
     setupChannels,
   } = await import("../commands/onboard-channels.js");
   const postWriteHooks = createChannelOnboardingPostWriteHookCollector();
+  const guardPersistentEffect = async (setupRuntime: RuntimeEnv) => {
+    // Cancellation can race an awaited authority check. Fence both sides so a
+    // retired wizard cannot cross an install, config-write, or hook boundary.
+    abortSignal.throwIfAborted();
+    await beforePersistentApply(setupRuntime);
+    abortSignal.throwIfAborted();
+  };
   return await runHostedSetup({
     label: "Channel setup",
     runtime,
-    beforePersistentApply,
+    beforePersistentApply: guardPersistentEffect,
     run: async ({ baseConfig, runtime: setupRuntime }) => ({
       nextConfig: await setupChannels(baseConfig, setupRuntime, prompter, {
         initialSelection: [channel],
@@ -106,7 +114,8 @@ export async function runHostedChannelSetup(
         quickstartDefaults: true,
         skipDmPolicyPrompt: true,
         skipConfirm: true,
-        beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
+        beforePersistentEffect: async () => await guardPersistentEffect(setupRuntime),
+        abortSignal,
         onPostWriteHook: (hook) => postWriteHooks.collect(hook),
       }),
       afterWrite: async (committedConfig) => {
@@ -114,7 +123,7 @@ export async function runHostedChannelSetup(
           hooks: postWriteHooks.drain(),
           cfg: committedConfig,
           runtime: setupRuntime,
-          beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
+          beforePersistentEffect: async () => await guardPersistentEffect(setupRuntime),
         });
       },
     }),

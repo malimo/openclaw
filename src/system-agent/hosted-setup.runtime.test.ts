@@ -13,7 +13,62 @@ import {
   type WizardPrompter,
 } from "./chat-engine.test-support.js";
 
+const QR_TEXT = "https://example.test/pair";
+
 describe("SystemAgentChatEngine runtime", () => {
+  it("fences default channel durable effects after QR cancellation", async () => {
+    useTempStateDir();
+    const baseConfig: OpenClawConfig = {};
+    const persistentEffect = vi.fn();
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      hash: "base-hash",
+      config: baseConfig,
+      sourceConfig: baseConfig,
+      issues: [],
+    });
+    mocks.setupChannels.mockImplementation(
+      async (
+        config: OpenClawConfig,
+        _runtime: unknown,
+        prompter: WizardPrompter,
+        options: { beforePersistentEffect?: () => Promise<void> },
+      ) => {
+        try {
+          await prompter.qrCode?.({
+            title: "Link a device",
+            message: "Scan this QR code and approve the device.",
+            text: QR_TEXT,
+            dismissed: new Promise<void>(() => {}),
+          });
+        } finally {
+          await options.beforePersistentEffect?.();
+          persistentEffect();
+        }
+        return config;
+      },
+    );
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      supportsQrCode: true,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const prompt = await engine.handle("connect signal");
+    expect(prompt.step?.type).toBe("qr");
+
+    const cancelled = await engine.handle("cancel");
+
+    expect(cancelled.text).toContain("setup cancelled");
+    expect(persistentEffect).not.toHaveBeenCalled();
+    expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+    expect(mocks.runCollectedChannelOnboardingPostWriteHooks).not.toHaveBeenCalled();
+  });
+
   it("hosts a channel setup wizard as chat turns", async () => {
     useTempStateDir();
     const wizardRuns: string[] = [];

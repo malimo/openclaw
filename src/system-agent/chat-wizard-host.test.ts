@@ -1,5 +1,5 @@
 import "./chat-engine.mocks.test-support.js";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fakeOverviewLoader,
   classifySystemAgentApprovalText,
@@ -15,7 +15,302 @@ import {
   type WizardPrompter,
 } from "./chat-engine.test-support.js";
 
+const QR_TEXT = "https://example.test/pair";
+
+function createQrEngine(
+  runChannelSetupWizard: NonNullable<
+    ConstructorParameters<typeof SystemAgentChatEngine>[0]["runChannelSetupWizard"]
+  >,
+) {
+  return new SystemAgentChatEngine({
+    runAgentTurn: async () => null,
+    planWithAssistant: async () => null,
+    deps: { loadOverview: fakeOverviewLoader() },
+    supportsQrCode: true,
+    runChannelSetupWizard,
+  });
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("SystemAgentChatEngine wizard", () => {
+  it("hosts QR setup as a passive owner-controlled wizard step", async () => {
+    let settleOwner!: () => void;
+    const owner = new Promise<void>((resolve) => {
+      settleOwner = resolve;
+    });
+    const engine = createQrEngine(async (_channel, prompter) => {
+      await prompter.qrCode?.({
+        title: "Link a device",
+        message: "Scan this QR code and approve the device.",
+        text: QR_TEXT,
+        dismissed: owner,
+      });
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    expect(prompt).toMatchObject({
+      wizardSettling: true,
+      step: {
+        id: expect.any(String),
+        type: "qr",
+        qrDataUrl: expect.stringMatching(/^data:image\/png;base64,/u),
+        expiresInMs: expect.any(Number),
+        executor: "client",
+      },
+    });
+    expect(prompt).not.toHaveProperty("wizardInputPending");
+    expect(prompt.question).toBeUndefined();
+    expect(prompt.text).not.toContain("Say `cancel`");
+    const stepId = expectDefined(prompt.step, "QR step").id;
+
+    await expect(engine.answerWizard({ stepId })).rejects.toThrow(
+      "QR setup continues automatically",
+    );
+    settleOwner();
+    await vi.waitFor(() => expect(engine.hasPendingQrCode()).toBe(false));
+    const done = await engine.handle("status");
+    expect(done.text).toContain("telegram is configured");
+    expect(done.step).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "chat command",
+      cancel: (engine: SystemAgentChatEngine) => engine.handle("cancel"),
+    },
+    {
+      name: "typed direct action",
+      cancel: (engine: SystemAgentChatEngine, stepId: string) => engine.cancelWizard({ stepId }),
+    },
+  ])("cancels active QR setup through a $name", async ({ cancel }) => {
+    let cleanupStarted = false;
+    let releaseCleanup!: () => void;
+    const cleanup = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const engine = createQrEngine(async (_channel, prompter) => {
+      try {
+        await prompter.qrCode?.({
+          title: "Link a device",
+          message: "Scan this QR code and approve the device.",
+          text: QR_TEXT,
+          dismissed: new Promise<void>(() => {}),
+        });
+      } finally {
+        cleanupStarted = true;
+        await cleanup;
+      }
+    });
+    const prompt = await engine.handle("connect telegram");
+    const stepId = expectDefined(prompt.step, "QR step").id;
+
+    const cancellation = cancel(engine, stepId);
+    await vi.waitFor(() => expect(cleanupStarted).toBe(true));
+    let completed = false;
+    void cancellation.then(() => {
+      completed = true;
+    });
+    await Promise.resolve();
+    expect(completed).toBe(false);
+
+    releaseCleanup();
+    const cancelled = await cancellation;
+    expect(cancelled.text).toContain("setup cancelled");
+    expect(cancelled).not.toHaveProperty("wizardInputPending");
+    expect(cancelled).not.toHaveProperty("step");
+  });
+
+  it("keeps cancellation reachable while an externally owned QR is pending", async () => {
+    let cleanupStarted = false;
+    let releaseCleanup!: () => void;
+    const cleanup = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const engine = createQrEngine(async (_channel, prompter, _beforePersistentApply, signal) => {
+      const owner = new Promise<void>((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () =>
+            reject(signal.reason instanceof Error ? signal.reason : new Error("QR owner aborted")),
+          { once: true },
+        );
+      });
+      try {
+        await prompter.qrCode?.({
+          title: "Link a device",
+          message: "Scan this QR code and approve the device.",
+          text: QR_TEXT,
+          dismissed: owner,
+          expiresAtMs: Date.now() + 60_000,
+        });
+        await owner;
+      } finally {
+        cleanupStarted = true;
+        await cleanup;
+      }
+    });
+    const prompt = await engine.handle("connect telegram");
+    expectDefined(prompt.step, "QR step");
+
+    const cancellation = engine.handle("cancel");
+    await vi.waitFor(() => expect(cleanupStarted).toBe(true));
+    releaseCleanup();
+    expect((await cancellation).text).toContain("setup cancelled");
+  });
+
+  it("rejects generic acknowledgements while the QR owner settles", async () => {
+    let settleOwner!: () => void;
+    const owner = new Promise<void>((resolve) => {
+      settleOwner = resolve;
+    });
+    let releaseRunner!: () => void;
+    const runnerGate = new Promise<void>((resolve) => {
+      releaseRunner = resolve;
+    });
+    let runnerReachedGate = false;
+    const engine = createQrEngine(async (_channel, prompter) => {
+      await prompter.qrCode?.({
+        title: "Link a device",
+        message: "Scan this QR code and approve the device.",
+        text: QR_TEXT,
+        dismissed: owner,
+        expiresAtMs: Date.now() + 60_000,
+      });
+      await owner;
+      runnerReachedGate = true;
+      await runnerGate;
+    });
+    const prompt = await engine.handle("connect telegram");
+    const stepId = expectDefined(prompt.step, "QR step").id;
+
+    await expect(engine.answerWizard({ stepId })).rejects.toThrow(
+      "QR setup continues automatically",
+    );
+    settleOwner();
+    await vi.waitFor(() => expect(runnerReachedGate).toBe(true));
+
+    await expect(engine.answerWizard({ stepId })).rejects.toThrow(
+      "No hosted wizard is awaiting an answer",
+    );
+
+    releaseRunner();
+    await vi.waitFor(() => expect(engine.hasPendingQrCode()).toBe(false));
+  });
+
+  it("cancels an externally owned QR after its presentation deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    let abortObserved = false;
+    const engine = createQrEngine(async (_channel, prompter, _beforePersistentApply, signal) => {
+      try {
+        await prompter.qrCode?.({
+          title: "Link a device",
+          message: "Scan this QR code and approve the device.",
+          text: QR_TEXT,
+          dismissed: new Promise<void>(() => {}),
+          expiresAtMs: 1_800_000_001_000,
+        });
+      } finally {
+        abortObserved = signal.aborted;
+      }
+    });
+    await engine.handle("connect telegram");
+    vi.setSystemTime(1_800_000_001_000);
+
+    const cancelled = await engine.handle("cancel");
+    expect(abortObserved).toBe(true);
+    expect(cancelled.text).toContain("setup cancelled");
+  });
+
+  it("advances after owner completion without a QR acknowledgement", async () => {
+    let settleOwner!: () => void;
+    const owner = new Promise<void>((resolve) => {
+      settleOwner = resolve;
+    });
+    const engine = createQrEngine(async (_channel, prompter) => {
+      await prompter.qrCode?.({
+        title: "Link a device",
+        message: "Scan this QR code and approve the device.",
+        text: QR_TEXT,
+        dismissed: owner,
+        expiresAtMs: Date.now() + 60_000,
+      });
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    expectDefined(prompt.step, "QR step");
+    settleOwner();
+    await vi.waitFor(() => expect(engine.hasPendingQrCode()).toBe(false));
+
+    const completed = await engine.handle("status");
+    expect(completed.text).toContain("telegram is configured");
+    expect(completed.step).toBeUndefined();
+  });
+
+  it("waits for an owner-settled QR runner before disposal completes", async () => {
+    let settleOwner!: () => void;
+    const owner = new Promise<void>((resolve) => {
+      settleOwner = resolve;
+    });
+    let releaseRunner!: () => void;
+    const runnerGate = new Promise<void>((resolve) => {
+      releaseRunner = resolve;
+    });
+    let runnerReachedApply = false;
+    const engine = createQrEngine(async (_channel, prompter) => {
+      await prompter.qrCode?.({
+        title: "Link a device",
+        message: "Scan this QR code and approve the device.",
+        text: QR_TEXT,
+        dismissed: owner,
+        expiresAtMs: Date.now() + 60_000,
+      });
+      runnerReachedApply = true;
+      await runnerGate;
+    });
+
+    await engine.handle("connect telegram");
+    settleOwner();
+    await vi.waitFor(() => expect(runnerReachedApply).toBe(true));
+
+    let disposed = false;
+    const disposal = engine.dispose().then(() => {
+      disposed = true;
+    });
+    await Promise.resolve();
+    expect(disposed).toBe(false);
+
+    releaseRunner();
+    await disposal;
+    expect(disposed).toBe(true);
+  });
+
+  it("scrubs an expired QR while its owner remains cancellable", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    const engine = createQrEngine(async (_channel, prompter) => {
+      await prompter.qrCode?.({
+        title: "Link a device",
+        message: "Scan this QR code and approve the device.",
+        text: QR_TEXT,
+        dismissed: new Promise<void>(() => {}),
+        expiresAtMs: 1_800_000_001_000,
+      });
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    const stepId = expectDefined(prompt.step, "QR step").id;
+    vi.setSystemTime(1_800_000_001_000);
+
+    await expect(engine.answerWizard({ stepId })).rejects.toThrow(
+      "No hosted wizard is awaiting an answer",
+    );
+    expect(engine.hasPendingQrCode()).toBe(true);
+    await engine.handle("cancel");
+  });
   it("recommends the confirm option matching the initial value", async () => {
     let enabled: boolean | undefined;
     const engine = new SystemAgentChatEngine({

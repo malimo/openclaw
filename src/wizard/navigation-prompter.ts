@@ -123,6 +123,15 @@ class WizardPromptNavigator {
           },
         }
       : {}),
+    ...(this.base.qrCode
+      ? {
+          qrCode: async (params) => {
+            // Replay may mint fresh credentials, so QR presentation always follows the
+            // dependency-owned lifecycle instead of reusing a cached wizard answer.
+            await this.base.qrCode?.(params);
+          },
+        }
+      : {}),
     plain: async (message) => {
       if (!this.shouldSuppressOutput()) {
         await this.base.plain?.(message);

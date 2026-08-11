@@ -254,4 +254,51 @@ describe("runWizardWithPromptNavigationScope", () => {
     expect(deviceCode).toHaveBeenCalledWith({ title: "Link device", code: "ABCD" });
     expect(openUrl).toHaveBeenCalledWith("https://example.com/link");
   });
+
+  it("presents a freshly generated QR again while replaying navigation history", async () => {
+    let pass = 0;
+    const qrCode = vi.fn(async () => undefined);
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("first")
+      .mockRejectedValueOnce(new WizardNavigationError("back"))
+      .mockResolvedValueOnce("first-again")
+      .mockResolvedValueOnce("second");
+    const prompter = createWizardPrompter({
+      qrCode,
+      select: select as unknown as WizardPrompter["select"],
+    });
+
+    const outcome = await runWizardWithPromptNavigation(prompter, async (scopedPrompter) => {
+      pass += 1;
+      await scopedPrompter.qrCode?.({
+        title: "Scan code",
+        message: "Scan this QR code and approve the device.",
+        text: `https://example.test/pair/${pass}`,
+        dismissed: Promise.resolve(),
+      });
+      await scopedPrompter.select({
+        message: "First choice",
+        options: selectOptions(["first"]),
+      });
+      await scopedPrompter.select({
+        message: "Second choice",
+        options: selectOptions(["second"]),
+      });
+    });
+
+    expect(outcome).toBeUndefined();
+    expect(qrCode).toHaveBeenNthCalledWith(1, {
+      title: "Scan code",
+      message: "Scan this QR code and approve the device.",
+      text: "https://example.test/pair/1",
+      dismissed: expect.any(Promise),
+    });
+    expect(qrCode).toHaveBeenNthCalledWith(2, {
+      title: "Scan code",
+      message: "Scan this QR code and approve the device.",
+      text: "https://example.test/pair/2",
+      dismissed: expect.any(Promise),
+    });
+  });
 });

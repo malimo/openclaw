@@ -202,7 +202,9 @@ export class ChatTurnRouter {
   ): Promise<SystemAgentChatReply> {
     if (this.wizard.active) {
       const result = await this.wizard.resolveReply(text);
-      return { text: await this.finishWizardText(result), action: "none" };
+      if (result !== null) {
+        return { text: await this.finishWizardText(result), action: "none" };
+      }
     }
     const trimmed = text.trim();
     if (!trimmed) {
