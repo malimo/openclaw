@@ -10,6 +10,7 @@ import {
   createPatchedAccountSetupAdapter,
   createSetupInputPresenceValidator,
   DEFAULT_ACCOUNT_ID,
+  patchChannelConfigForAccount,
   promptParsedAllowFromForAccount,
   setAccountAllowFromForChannel,
   setSetupChannelEnabled,
@@ -167,6 +168,10 @@ export function normalizeSignalAccountInput(value: string | null | undefined): s
     return null;
   }
   return `+${digits}`;
+}
+
+export function isSameSignalAccount(left: string | null | undefined, right: string): boolean {
+  return normalizeSignalAccountInput(left) === normalizeSignalAccountInput(right);
 }
 
 function isUuidLike(value: string): boolean {
@@ -504,7 +509,18 @@ export const signalSetupAdapter: ChannelSetupAdapter<SignalSetupInput> = {
     // transport. Rejoin that pair here so Signal keeps one canonical default-account shape.
     const cfg = restorePromotedSignalDefaultAccount(params.cfg);
     const previousTransport = resolveConfiguredSignalTransport(cfg, accountId);
-    const next = signalSetupAdapterBase.applyAccountConfig?.({ ...params, cfg, accountId }) ?? cfg;
+    let next = signalSetupAdapterBase.applyAccountConfig?.({ ...params, cfg, accountId }) ?? cfg;
+    if (
+      suppliedAccount &&
+      !isSameSignalAccount(resolveSignalAccount({ cfg, accountId }).config.account, suppliedAccount)
+    ) {
+      next = patchChannelConfigForAccount({
+        cfg: next,
+        channel,
+        accountId,
+        patch: { accountUuid: undefined },
+      });
+    }
     const configuredTransport = resolveConfiguredSignalTransport(next, accountId);
     if (configuredTransport && configuredTransport.kind !== "managed-native") {
       const transport =

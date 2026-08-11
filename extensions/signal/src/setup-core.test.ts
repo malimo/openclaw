@@ -145,6 +145,47 @@ describe("signalSetupAdapter", () => {
     },
   );
 
+  it("clears the UUID when setup replaces the normalized Signal account", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            accounts: {
+              work: {
+                account: "+15555550123",
+                accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+      input: { signalNumber: "+15555550124" },
+    });
+
+    expect(next?.channels?.signal?.accounts?.work?.account).toBe("+15555550124");
+    expect(next?.channels?.signal?.accounts?.work?.accountUuid).toBeUndefined();
+  });
+
+  it("preserves the UUID when setup keeps the same normalized Signal account", () => {
+    const accountUuid = "123e4567-e89b-12d3-a456-426614174000";
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            accountUuid,
+          },
+        },
+      },
+      accountId: "default",
+      input: { signalNumber: "signal: +1 (555) 555-0123" },
+    });
+
+    expect(next?.channels?.signal?.account).toBe("+15555550123");
+    expect(next?.channels?.signal?.accountUuid).toBe(accountUuid);
+  });
+
   it("restores a generically promoted default account before writing a named account", () => {
     const next = signalSetupAdapter.applyAccountConfig?.({
       cfg: {

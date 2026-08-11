@@ -15,6 +15,7 @@ import {
 } from "./accounts.js";
 import {
   assertSignalAccountNotAssignedToSibling,
+  isSameSignalAccount,
   normalizeSignalAccountInput,
   signalSetupStateKeys,
 } from "./setup-core.js";
@@ -67,7 +68,15 @@ export async function finalizeSignalExistingServerSetup(params: SignalFinalizePa
         cfg,
         channel: "signal",
         accountId: params.accountId,
-        patch: { account, accountUuid: undefined },
+        patch: {
+          account,
+          ...(isSameSignalAccount(
+            resolveSignalAccount({ cfg, accountId: params.accountId }).config.account,
+            account,
+          )
+            ? {}
+            : { accountUuid: undefined }),
+        },
       });
       shouldPromptAccount = false;
     }

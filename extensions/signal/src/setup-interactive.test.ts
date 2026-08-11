@@ -308,6 +308,39 @@ describe("Signal existing-server setup", () => {
     expect(finalized?.cfg?.channels?.signal?.account).toBe("+15555550123");
   });
 
+  it("preserves the UUID when recovery keeps the same normalized account", async () => {
+    mocks.probeSignalTransport.mockResolvedValueOnce({
+      ok: false,
+      error: "selected account is unavailable",
+    });
+    const accountUuid = "123e4567-e89b-12d3-a456-426614174000";
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["account"],
+      textValues: ["signal: +1 (555) 555-0123"],
+    });
+
+    const finalized = await runSetupWizardFinalize({
+      finalize: signalSetupWizard.finalize,
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            accountUuid,
+          },
+        },
+      },
+      credentialValues: {
+        signalTransportKind: "external-native",
+        signalServerUrl: "http://signal-helper:8080",
+      },
+      prompter: queued.prompter,
+      runtime: createRuntimeEnv({ throwOnExit: false }),
+    });
+
+    expect(finalized?.cfg?.channels?.signal?.account).toBe("+15555550123");
+    expect(finalized?.cfg?.channels?.signal?.accountUuid).toBe(accountUuid);
+  });
+
   it("rejects an existing-server recovery account owned by a sibling", async () => {
     mocks.probeSignalTransport.mockResolvedValueOnce({
       ok: false,
