@@ -234,16 +234,15 @@ export class SystemAgentChatEngine {
       return reply;
     });
     this.turnQueue = observation.catch(() => undefined);
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let cancelTimer: (() => void) | undefined;
     const outcome = await Promise.race([
       observation.then((reply) => ({ reply })),
       new Promise<undefined>((resolve) => {
-        timer = setTimeout(resolve, 0);
+        const timer = setTimeout(resolve, 0);
+        cancelTimer = () => clearTimeout(timer);
       }),
     ]);
-    if (timer) {
-      clearTimeout(timer);
-    }
+    cancelTimer?.();
     if (outcome) {
       if (
         outcome.reply.text &&
