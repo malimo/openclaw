@@ -27,6 +27,19 @@ export type CustodianMessage = {
   step: WizardStepPresentation | null;
 };
 
+export function createCustodianAssistantMessage(params: {
+  id: number;
+  text: string;
+  question: CustodianMessage["question"];
+  step: CustodianMessage["step"];
+}): CustodianMessage {
+  return {
+    ...params,
+    role: "assistant",
+    at: Date.now(),
+  };
+}
+
 export function hasUnresolvedCustodianQuestion(
   messages: readonly CustodianMessage[],
   dismissedQuestions: ReadonlySet<string>,
