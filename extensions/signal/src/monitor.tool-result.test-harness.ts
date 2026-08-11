@@ -7,7 +7,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createPluginRuntimeMock, type MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { SignalDaemonHandle } from "./daemon.js";
@@ -295,6 +295,7 @@ export function installSignalToolResultTestHooks() {
     signalToolResultSessionStore.path = path.join(stateDir, "sessions.json");
     signalToolResultIngressQueue = undefined;
     setSignalRuntime({
+      channel: createPluginRuntimeMock().channel,
       logging: {
         getChildLogger: () => ({
           debug: vi.fn(),

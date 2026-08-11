@@ -27,7 +27,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SignalTransportConfig } from "./account-types.js";
-import { resolveDefaultSignalAccountId, resolveSignalAccount } from "./accounts.js";
+import {
+  listSignalAccountIds,
+  resolveDefaultSignalAccountId,
+  resolveSignalAccount,
+} from "./accounts.js";
 import {
   detectSignalTransport,
   prepareSignalManagedNativeTransport,
@@ -42,6 +46,60 @@ const t = createSetupTranslator();
 const channel = "signal" as const;
 export const SIGNAL_LINKED_ACCOUNT_INPUT_KEY = "signalLinkedAccount";
 export const SIGNAL_LINK_COMPLETED_INPUT_KEY = "signalLinkCompleted";
+
+// Prepare emits this transient state before generic text inputs run; finalize consumes it
+// to rebuild and probe the account-owned transport before any transport write.
+export const signalSetupStateKeys = {
+  transportKind: "signalTransportKind",
+  serverUrl: "signalServerUrl",
+  managedReuseAccount: "signalManagedReuseAccount",
+  managedReuseTransport: "signalManagedReuseTransport",
+  externalReuseAccount: "signalExternalReuseAccount",
+  externalReuseTransport: "signalExternalReuseTransport",
+} as const;
+
+export function isSignalAccountAssignedToSibling(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  account: string;
+}): boolean {
+  const account = normalizeSignalAccountInput(params.account);
+  const accountId = normalizeAccountId(params.accountId);
+  if (!account) {
+    return false;
+  }
+  return listSignalAccountIds(params.cfg).some((candidateAccountId) => {
+    const candidate = resolveSignalAccount({ cfg: params.cfg, accountId: candidateAccountId });
+    return (
+      candidate.accountId !== accountId &&
+      normalizeSignalAccountInput(candidate.config.account) === account
+    );
+  });
+}
+
+function resolveSignalSiblingAssignmentError(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  account: string;
+}): string | undefined {
+  const account = normalizeSignalAccountInput(params.account);
+  if (!account || !isSignalAccountAssignedToSibling({ ...params, account })) {
+    return undefined;
+  }
+  return `${account} is already assigned to another OpenClaw Signal account. Choose a different account or remove the existing assignment, then retry setup.`;
+}
+
+export function assertSignalAccountNotAssignedToSibling(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  account: string;
+}): void {
+  const error = resolveSignalSiblingAssignmentError(params);
+  if (!error) {
+    return;
+  }
+  throw new Error(error);
+}
 
 const signalSetupFields = {
   signalNumber: {
@@ -296,24 +354,44 @@ export const signalNumberTextInput: ChannelSetupWizardTextInput = {
     normalizeSignalAccountInput(resolveSignalAccount({ cfg, accountId }).config.account) ??
     undefined,
   keepPrompt: (value) => t("wizard.signal.accountKeep", { value }),
-  validate: ({ value }) =>
-    normalizeSignalAccountInput(value) ? undefined : INVALID_SIGNAL_ACCOUNT_ERROR,
+  validate: ({ value, cfg, accountId }) => {
+    const account = normalizeSignalAccountInput(value);
+    return account
+      ? resolveSignalSiblingAssignmentError({ cfg, accountId, account })
+      : INVALID_SIGNAL_ACCOUNT_ERROR;
+  },
   normalizeValue: ({ value }) => normalizeSignalAccountInput(value) ?? value,
-  shouldPrompt: ({ credentialValues }) =>
-    credentialValues[SIGNAL_LINKED_ACCOUNT_INPUT_KEY] !== "true",
+  shouldPrompt: ({ credentialValues }) => {
+    const transportKind = credentialValues[signalSetupStateKeys.transportKind];
+    return (
+      transportKind === "external-native" ||
+      transportKind === "container" ||
+      credentialValues[SIGNAL_LINKED_ACCOUNT_INPUT_KEY] !== "true"
+    );
+  },
   applyCurrentValue: true,
 };
+
+export const signalSetupStatusLines = [
+  `Then run: ${formatCliCommand("openclaw gateway call channels.status --params '{\"probe\":true}'")}`,
+  `Docs: ${formatDocsLink("/signal", "signal")}`,
+];
 
 export const signalCompletionNote = {
   title: t("wizard.signal.nextStepsTitle"),
   lines: [
     t("wizard.signal.nextLinkDevice"),
     t("wizard.signal.nextScanQr"),
-    `Then run: ${formatCliCommand("openclaw gateway call channels.status --params '{\"probe\":true}'")}`,
-    `Docs: ${formatDocsLink("/signal", "signal")}`,
+    ...signalSetupStatusLines,
   ],
-  shouldShow: ({ credentialValues }) =>
-    credentialValues[SIGNAL_LINK_COMPLETED_INPUT_KEY] !== "true",
+  shouldShow: ({ credentialValues }) => {
+    const transportKind = credentialValues[signalSetupStateKeys.transportKind];
+    return (
+      transportKind !== "external-native" &&
+      transportKind !== "container" &&
+      credentialValues[SIGNAL_LINK_COMPLETED_INPUT_KEY] !== "true"
+    );
+  },
 } satisfies NonNullable<ChannelSetupWizard["completionNote"]>;
 
 const signalSetupAdapterBase = createPatchedAccountSetupAdapter<SignalSetupInput>({
@@ -340,8 +418,15 @@ const signalSetupAdapterBase = createPatchedAccountSetupAdapter<SignalSetupInput
           return "Signal --http-host must be a hostname or IP address.";
         }
       }
-      if (input.signalNumber !== undefined && !normalizeSignalAccountInput(input.signalNumber)) {
-        return INVALID_SIGNAL_ACCOUNT_ERROR;
+      if (input.signalNumber !== undefined) {
+        const account = normalizeSignalAccountInput(input.signalNumber);
+        if (!account) {
+          return INVALID_SIGNAL_ACCOUNT_ERROR;
+        }
+        const assignmentError = resolveSignalSiblingAssignmentError({ cfg, accountId, account });
+        if (assignmentError) {
+          return assignmentError;
+        }
       }
       if (
         input.signalTransport === "container" &&
@@ -405,6 +490,16 @@ export const signalSetupAdapter: ChannelSetupAdapter<SignalSetupInput> = {
   ],
   applyAccountConfig: (params) => {
     const accountId = normalizeAccountId(params.accountId);
+    // Direct adapter callers can bypass validateInput; enforce identity ownership at the
+    // canonical config write so one target cannot claim a sibling's linked device.
+    const suppliedAccount = normalizeSignalAccountInput(params.input.signalNumber);
+    if (suppliedAccount) {
+      assertSignalAccountNotAssignedToSibling({
+        cfg: params.cfg,
+        accountId,
+        account: suppliedAccount,
+      });
+    }
     // Generic multi-account setup can promote the root account but not its owner-specific
     // transport. Rejoin that pair here so Signal keeps one canonical default-account shape.
     const cfg = restorePromotedSignalDefaultAccount(params.cfg);
@@ -455,6 +550,7 @@ export function createSignalSetupWizardProxy(loadWizard: () => Promise<ChannelSe
       unconfiguredScore: 0,
     },
     delegatePrepare: true,
+    delegateFinalize: true,
     credentials: [],
     textInputs: [
       createSignalCliPathTextInput(

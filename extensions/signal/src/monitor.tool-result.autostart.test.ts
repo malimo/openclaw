@@ -1,8 +1,13 @@
 // Signal tests cover monitor.tool result.autostart plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { describe, expect, it, vi } from "vitest";
+import {
+  createRuntimeEnv,
+  createTestWizardPrompter,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SignalDaemonHandle } from "./daemon.js";
+import { isSignalManagedDaemonOwned } from "./managed-daemon-runtime-context.js";
 import {
   createSignalToolResultConfig,
   createMockSignalDaemonHandle,
@@ -11,10 +16,28 @@ import {
   installSignalToolResultTestHooks,
   setSignalToolResultTestConfig,
 } from "./monitor.tool-result.test-harness.js";
+import type { SignalTransportProbeResult } from "./setup-transport.js";
+
+const validationMocks = vi.hoisted(() => ({
+  assertBindAvailable: vi.fn(async () => undefined),
+  probeTransport: vi.fn(
+    async (): Promise<SignalTransportProbeResult> => ({ ok: true, status: 200 }),
+  ),
+}));
+
+vi.mock("./setup-daemon-bind.js", () => ({
+  assertSignalSetupDaemonBindAvailable: validationMocks.assertBindAvailable,
+}));
+vi.mock("./setup-transport.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./setup-transport.js")>();
+  return { ...actual, probeSignalTransport: validationMocks.probeTransport };
+});
 
 installSignalToolResultTestHooks();
 
 const { monitorSignalProvider } = await import("./monitor.js");
+const { managedSignalTransportIdentity, probeManagedSignalSetup } =
+  await import("./setup-managed-validation.js");
 
 const { waitForTransportReadyMock, spawnSignalDaemonMock, streamMock } =
   getSignalToolResultTestMocks();
@@ -22,6 +45,13 @@ const { waitForTransportReadyMock, spawnSignalDaemonMock, streamMock } =
 const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
 type MonitorSignalProviderOptions = NonNullable<Parameters<typeof monitorSignalProvider>[0]>;
 type SignalDaemonExitEvent = Awaited<SignalDaemonHandle["exited"]>;
+
+beforeEach(() => {
+  validationMocks.assertBindAvailable.mockReset();
+  validationMocks.assertBindAvailable.mockResolvedValue(undefined);
+  validationMocks.probeTransport.mockReset();
+  validationMocks.probeTransport.mockResolvedValue({ ok: true, status: 200 });
+});
 
 function createMonitorRuntime() {
   return {
@@ -73,6 +103,85 @@ function expectWaitForTransportReadyTimeout(timeoutMs: number) {
 }
 
 describe("monitorSignalProvider autostart", () => {
+  it("lets setup validate the active owned daemon, then removes ownership on stop", async () => {
+    const account = "+15555550123";
+    const transport = {
+      kind: "managed-native" as const,
+      cliPath: "/opt/signal-cli",
+      configPath: "/var/lib/signal-cli",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+    };
+    setSignalAutoStartConfig({
+      account,
+      cliPath: transport.cliPath,
+      configPath: transport.configPath,
+      httpHost: transport.httpHost,
+      httpPort: transport.httpPort,
+    });
+    const abortController = new AbortController();
+    const owner = {
+      accountId: "default",
+      account,
+      cliPath: transport.cliPath,
+      configPath: transport.configPath,
+      httpHost: transport.httpHost,
+      httpPort: transport.httpPort,
+    };
+    streamMock.mockImplementation(async () => {
+      expect(isSignalManagedDaemonOwned(owner)).toBe(true);
+      await expect(
+        probeManagedSignalSetup({
+          cfg: config as OpenClawConfig,
+          accountId: "default",
+          transport,
+          account,
+          reusableConfiguredAccount: account,
+          reusableConfiguredTransport: managedSignalTransportIdentity(transport),
+          runtime: createRuntimeEnv({ throwOnExit: false }),
+          prompter: createTestWizardPrompter(),
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(validationMocks.probeTransport).toHaveBeenCalledWith(
+        expect.objectContaining({ nativeAccountBinding: "owner-known-bound-account" }),
+      );
+      expect(validationMocks.assertBindAvailable).not.toHaveBeenCalled();
+      expect(spawnSignalDaemonMock).toHaveBeenCalledOnce();
+      abortController.abort();
+    });
+
+    await runMonitorWithMocks({
+      abortSignal: abortController.signal,
+      runtime: createMonitorRuntime(),
+    });
+
+    expect(isSignalManagedDaemonOwned(owner)).toBe(false);
+    validationMocks.probeTransport.mockResolvedValueOnce({
+      ok: false,
+      failureKind: "unverifiable-single-account",
+      error: "server account cannot be verified",
+    });
+    validationMocks.assertBindAvailable.mockRejectedValueOnce(
+      new Error("address already in use (EADDRINUSE)"),
+    );
+    await expect(
+      probeManagedSignalSetup({
+        cfg: config as OpenClawConfig,
+        accountId: "default",
+        transport,
+        account,
+        reusableConfiguredAccount: account,
+        reusableConfiguredTransport: managedSignalTransportIdentity(transport),
+        runtime: createRuntimeEnv({ throwOnExit: false }),
+        prompter: createTestWizardPrompter(),
+      }),
+    ).resolves.toMatchObject({ ok: false, error: expect.stringContaining("EADDRINUSE") });
+    expect(validationMocks.probeTransport).toHaveBeenLastCalledWith(
+      expect.objectContaining({ nativeAccountBinding: "selected-account" }),
+    );
+    expect(spawnSignalDaemonMock).toHaveBeenCalledOnce();
+  });
+
   it.each(["external-native", "container"] as const)(
     "does not spawn a daemon for %s transport",
     async (kind) => {

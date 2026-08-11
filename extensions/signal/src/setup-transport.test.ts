@@ -517,10 +517,36 @@ describe("probeSignalTransport", () => {
         cfg: cfg as never,
         accountId: "work",
         transport: { kind: "managed-native" },
+        account: "+15555550124",
         probeNative,
       }),
     ).resolves.toEqual({ ok: true });
-    expect(probeNative).toHaveBeenCalledWith("http://127.0.0.1:8081", 10_000);
+    expect(probeNative).toHaveBeenCalledWith(
+      "http://127.0.0.1:8081",
+      10_000,
+      "+15555550124",
+      "selected-account",
+    );
+  });
+
+  it("passes the selected account to external native readiness", async () => {
+    const probeNative = vi.fn().mockResolvedValue({ ok: true });
+
+    await expect(
+      probeSignalTransport({
+        cfg: {},
+        accountId: "default",
+        transport: { kind: "external-native", url: "http://signal:8080" },
+        account: "+15555550123",
+        probeNative,
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(probeNative).toHaveBeenCalledWith(
+      "http://signal:8080",
+      10_000,
+      "+15555550123",
+      "selected-account",
+    );
   });
 });
 

@@ -5,6 +5,11 @@ import https from "node:https";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type {
+  SignalNativeAccountBinding,
+  SignalTransportProbeResult,
+} from "./transport-detection.js";
 
 export type SignalRpcOptions = {
   baseUrl: string;
@@ -24,6 +29,15 @@ type SignalRpcResponse<T> = {
   error?: SignalRpcError;
   id?: string | number | null;
 };
+
+class SignalRpcRequestError extends Error {
+  constructor(
+    readonly rpcCode: number | "unknown",
+    message: string,
+  ) {
+    super(`Signal RPC ${String(rpcCode)}: ${message}`);
+  }
+}
 
 type SignalSseEvent = {
   event?: string;
@@ -230,9 +244,73 @@ export async function signalRpcRequest<T = unknown>(
   if (parsed.error) {
     const code = parsed.error.code ?? "unknown";
     const msg = parsed.error.message ?? "Signal RPC error";
-    throw new Error(`Signal RPC ${code}: ${msg}`);
+    throw new SignalRpcRequestError(code, msg);
   }
   return parsed.result as T;
+}
+
+export async function signalAccountCheck(
+  baseUrl: string,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  account?: string,
+  accountBinding: SignalNativeAccountBinding = "selected-account",
+): Promise<SignalTransportProbeResult> {
+  if (!account) {
+    return {
+      ok: false,
+      status: null,
+      error: "Signal native setup requires an account number before it can be validated.",
+    };
+  }
+
+  try {
+    const accounts = await signalRpcRequest("listAccounts", undefined, {
+      baseUrl,
+      timeoutMs,
+    });
+    if (!Array.isArray(accounts)) {
+      return {
+        ok: false,
+        status: 200,
+        error: "Signal listAccounts returned an invalid response.",
+      };
+    }
+    const accountNumbers = accounts.flatMap((entry) => {
+      if (!isRecord(entry)) {
+        return [];
+      }
+      const number = normalizeOptionalString(entry.number);
+      return number ? [number] : [];
+    });
+    if (!accountNumbers.includes(account)) {
+      return {
+        ok: false,
+        status: 200,
+        error: `Signal account ${account} is not available on this server.`,
+      };
+    }
+    return { ok: true, status: 200, error: null };
+  } catch (error) {
+    if (error instanceof SignalRpcRequestError && error.rpcCode === -32601) {
+      if (accountBinding === "owner-known-bound-account") {
+        // A daemon owner binds the process to this account before probing. Single-account
+        // signal-cli omits listAccounts, so process ownership is the identity proof here.
+        return { ok: true, status: 200, error: null };
+      }
+      return {
+        ok: false,
+        status: 200,
+        failureKind: "unverifiable-single-account",
+        error:
+          "This signal-cli server is bound to one account and does not expose which account it uses. Start it without --account so OpenClaw can verify the selected account, or use OpenClaw-managed local setup.",
+      };
+    }
+    return {
+      ok: false,
+      status: null,
+      error: formatErrorMessage(error),
+    };
+  }
 }
 
 export async function signalCheck(

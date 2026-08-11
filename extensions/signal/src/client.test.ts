@@ -16,6 +16,7 @@ vi.mock("openclaw/plugin-sdk/core", async () => {
 });
 
 let signalCheck: typeof import("./client.js").signalCheck;
+let signalAccountCheck: typeof import("./client.js").signalAccountCheck;
 let signalRpcRequest: typeof import("./client.js").signalRpcRequest;
 let streamSignalEvents: typeof import("./client.js").streamSignalEvents;
 
@@ -49,7 +50,8 @@ async function withSignalServer(
 }
 
 beforeAll(async () => {
-  ({ signalCheck, signalRpcRequest, streamSignalEvents } = await import("./client.js"));
+  ({ signalAccountCheck, signalCheck, signalRpcRequest, streamSignalEvents } =
+    await import("./client.js"));
 });
 
 afterEach(async () => {
@@ -300,6 +302,97 @@ describe("signalCheck", () => {
       status: 503,
       error: "HTTP 503",
     });
+  });
+});
+
+describe("signalAccountCheck", () => {
+  it("requires an account before probing native readiness", async () => {
+    await expect(signalAccountCheck("http://127.0.0.1:1")).resolves.toEqual({
+      ok: false,
+      status: null,
+      error: "Signal native setup requires an account number before it can be validated.",
+    });
+  });
+
+  it("accepts a selected account exposed by a multi-account daemon", async () => {
+    const baseUrl = await withSignalServer(async (req, res) => {
+      expect(JSON.parse(await readRequestBody(req))).toEqual({
+        jsonrpc: "2.0",
+        method: "listAccounts",
+        id: "test-id",
+      });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          result: [{ number: "+15555550123" }, { number: "+15555550124" }],
+          id: "test-id",
+        }),
+      );
+    });
+
+    await expect(signalAccountCheck(baseUrl, 10_000, "+15555550124")).resolves.toEqual({
+      ok: true,
+      status: 200,
+      error: null,
+    });
+  });
+
+  it("rejects a selected account missing from a multi-account daemon", async () => {
+    const baseUrl = await withSignalServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          result: [{ number: "+15555550123" }],
+          id: "test-id",
+        }),
+      );
+    });
+
+    await expect(signalAccountCheck(baseUrl, 10_000, "+15555550124")).resolves.toEqual({
+      ok: false,
+      status: 200,
+      error: "Signal account +15555550124 is not available on this server.",
+    });
+  });
+
+  it("rejects an externally managed daemon whose bound account cannot be verified", async () => {
+    const baseUrl = await withSignalServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32601, message: "Method not implemented" },
+          id: "test-id",
+        }),
+      );
+    });
+
+    await expect(signalAccountCheck(baseUrl, 10_000, "+15555550124")).resolves.toEqual({
+      ok: false,
+      status: 200,
+      failureKind: "unverifiable-single-account",
+      error:
+        "This signal-cli server is bound to one account and does not expose which account it uses. Start it without --account so OpenClaw can verify the selected account, or use OpenClaw-managed local setup.",
+    });
+  });
+
+  it("accepts a bound single-account daemon when its owner supplied the account", async () => {
+    const baseUrl = await withSignalServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32601, message: "Method not implemented" },
+          id: "test-id",
+        }),
+      );
+    });
+
+    await expect(
+      signalAccountCheck(baseUrl, 10_000, "+15555550124", "owner-known-bound-account"),
+    ).resolves.toEqual({ ok: true, status: 200, error: null });
   });
 });
 

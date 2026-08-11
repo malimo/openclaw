@@ -69,6 +69,7 @@ export function resolveLocalSignalTransportPort(baseUrl: string): number | undef
 
 export function isSignalManagedNativeConnectionUrlForBind(
   transport: SignalTransportConfig,
+  options?: { localEndpointAliases?: ReadonlySet<string> },
 ): boolean {
   if (transport.kind !== "managed-native" || !transport.url) {
     return false;
@@ -92,10 +93,22 @@ export function isSignalManagedNativeConnectionUrlForBind(
     return true;
   }
   if (bindHost === "0.0.0.0") {
-    return connectionHost === "localhost" || /^127(?:\.\d{1,3}){3}$/.test(connectionHost);
+    return (
+      connectionHost === "localhost" ||
+      /^127(?:\.\d{1,3}){3}$/.test(connectionHost) ||
+      [...(options?.localEndpointAliases ?? [])].some(
+        (alias) => normalizeSignalEndpointHost(alias) === connectionHost,
+      )
+    );
   }
   if (bindHost === "::") {
-    return connectionHost === "localhost" || connectionHost === "::1";
+    return (
+      connectionHost === "localhost" ||
+      connectionHost === "::1" ||
+      [...(options?.localEndpointAliases ?? [])].some(
+        (alias) => normalizeSignalEndpointHost(alias) === connectionHost,
+      )
+    );
   }
   // Only the ambiguous "localhost" name bridges address families. An exact
   // cross-family pair (127.0.0.1 bind vs ::1 URL) is a different socket — e.g.

@@ -236,6 +236,29 @@ export async function containerCheck(
     }
     const receiveAccount = account?.trim();
     if (receiveAccount) {
+      await releaseUnreadResponseBody(res);
+      res = undefined;
+      const linkedAccounts = await containerRestRequest("/v1/accounts", {
+        baseUrl: normalized,
+        timeoutMs,
+      });
+      if (
+        !Array.isArray(linkedAccounts) ||
+        !linkedAccounts.every((entry): entry is string => typeof entry === "string")
+      ) {
+        return {
+          ok: false,
+          status: 200,
+          error: "Signal container returned an invalid linked-account list.",
+        };
+      }
+      if (!linkedAccounts.some((entry) => entry.trim() === receiveAccount)) {
+        return {
+          ok: false,
+          status: 200,
+          error: `Signal account ${receiveAccount} is not linked on this container.`,
+        };
+      }
       return await containerReceiveCheck(normalized, receiveAccount, timeoutMs);
     }
     return { ok: true, status: res.status, error: null };

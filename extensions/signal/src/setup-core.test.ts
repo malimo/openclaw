@@ -1,7 +1,11 @@
 // Signal tests cover setup adapter integration with account-owned transport policy.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSignalCliPathTextInput, signalSetupAdapter } from "./setup-core.js";
+import {
+  createSignalCliPathTextInput,
+  signalNumberTextInput,
+  signalSetupAdapter,
+} from "./setup-core.js";
 import { signalSetupWizard } from "./setup-surface.js";
 
 const detectSignalTransportMock = vi.hoisted(() => vi.fn());
@@ -474,6 +478,76 @@ describe("signalSetupAdapter", () => {
       ).toBe("Invalid E.164 phone number (must start with + and country code, e.g. +15555550123)");
     },
   );
+
+  it("rejects a sibling account through every explicit setup entry point", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        signal: {
+          accounts: {
+            personal: { account: "+15555550123" },
+          },
+        },
+      },
+    };
+    const account = "signal: +1 (555) 555-0123";
+    const error =
+      "+15555550123 is already assigned to another OpenClaw Signal account. Choose a different account or remove the existing assignment, then retry setup.";
+
+    expect(
+      signalNumberTextInput.validate?.({
+        value: account,
+        cfg,
+        accountId: "work",
+        credentialValues: {},
+      }),
+    ).toBe(error);
+    expect(
+      signalSetupAdapter.validateInput?.({
+        cfg,
+        accountId: "work",
+        input: { signalNumber: account },
+      }),
+    ).toBe(error);
+    expect(() =>
+      signalSetupAdapter.applyAccountConfig?.({
+        cfg,
+        accountId: "work",
+        input: { signalNumber: account },
+      }),
+    ).toThrow(error);
+    expect(cfg.channels?.signal?.accounts).not.toHaveProperty("work");
+  });
+
+  it("allows the target account to keep its identity or choose an unassigned one", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        signal: {
+          accounts: {
+            personal: { account: "+15555550123" },
+            work: { account: "+15555550124" },
+          },
+        },
+      },
+    };
+
+    for (const value of ["+15555550124", "+15555550125"]) {
+      expect(
+        signalNumberTextInput.validate?.({
+          value,
+          cfg,
+          accountId: "work",
+          credentialValues: {},
+        }),
+      ).toBeUndefined();
+      expect(
+        signalSetupAdapter.validateInput?.({
+          cfg,
+          accountId: "work",
+          input: { signalNumber: value },
+        }),
+      ).toBeNull();
+    }
+  });
 
   it.each(["0", "abc", "65536"])("rejects invalid managed HTTP port %s", (httpPort) => {
     expect(

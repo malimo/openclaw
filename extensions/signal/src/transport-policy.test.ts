@@ -3,7 +3,10 @@
 // sockets whose URLs must survive bind-port reassignment untouched.
 import { describe, expect, it } from "vitest";
 import type { SignalTransportConfig } from "./account-types.js";
-import { assignSignalManagedNativePort } from "./transport-policy.js";
+import {
+  assignSignalManagedNativePort,
+  isSignalManagedNativeConnectionUrlForBind,
+} from "./transport-policy.js";
 
 type SignalManagedNativeTransport = Extract<SignalTransportConfig, { kind: "managed-native" }>;
 
@@ -33,5 +36,28 @@ describe("assignSignalManagedNativePort", () => {
     );
     expect(next.url).toBe("http://[::1]:8080");
     expect(next.httpPort).toBe(9090);
+  });
+});
+
+describe("isSignalManagedNativeConnectionUrlForBind", () => {
+  it.each(["192.0.2.10", "signal-host.local"])(
+    "treats %s as owned by an IPv4 wildcard bind when supplied as a local alias",
+    (alias) => {
+      expect(
+        isSignalManagedNativeConnectionUrlForBind(
+          managedTransport(`http://${alias}:8080`, "0.0.0.0"),
+          { localEndpointAliases: new Set(["192.0.2.10", "signal-host.local"]) },
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("does not claim an unrelated host for a wildcard bind", () => {
+    expect(
+      isSignalManagedNativeConnectionUrlForBind(
+        managedTransport("http://signal-helper:8080", "0.0.0.0"),
+        { localEndpointAliases: new Set(["192.0.2.10", "signal-host.local"]) },
+      ),
+    ).toBe(false);
   });
 });

@@ -7,22 +7,39 @@ import {
   WizardCancelledError,
 } from "openclaw/plugin-sdk/setup";
 import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
-import { listSignalAccountIds, resolveSignalAccount } from "./accounts.js";
+import { listSignalAccountIds, resolveSignalAccount, resolveSignalTransport } from "./accounts.js";
 import { installSignalCli } from "./install-signal-cli.js";
 import {
   createSignalCliPathTextInput,
+  assertSignalAccountNotAssignedToSibling,
+  isSignalAccountAssignedToSibling,
   SIGNAL_LINKED_ACCOUNT_INPUT_KEY,
   SIGNAL_LINK_COMPLETED_INPUT_KEY,
   signalCompletionNote,
   signalDmPolicy,
   signalNumberTextInput,
+  signalSetupStatusLines,
   normalizeSignalAccountInput,
+  signalSetupStateKeys,
 } from "./setup-core.js";
+import {
+  finalizeSignalExistingServerSetup,
+  prepareSignalExistingServerSetup,
+} from "./setup-interactive.js";
+import {
+  managedSignalTransportIdentity,
+  probeManagedSignalSetup,
+} from "./setup-managed-validation.js";
+import {
+  prepareSignalManagedNativeTransport,
+  writeSignalAccountTransport,
+} from "./setup-transport.js";
 import { linkSignalCliAccount, listSignalCliAccounts } from "./signal-cli-link.js";
 
 const t = createSetupTranslator();
 
 const channel = "signal" as const;
+type SignalSetupMode = "local" | "existing-server";
 const configuredLabel = t("wizard.channels.statusConfigured");
 const unconfiguredLabel = t("wizard.channels.statusNeedsSetup");
 const managedStatus = createDetectedBinaryStatus({
@@ -71,14 +88,53 @@ export const signalSetupWizard: ChannelSetupWizard = {
       return params.configured ? 1 : 0;
     },
   },
-  prepare: async ({ cfg, accountId, credentialValues, runtime, prompter, options }) => {
-    if (!options?.allowSignalInstall) {
-      return undefined;
-    }
+  prepare: async (params) => {
+    const { cfg, accountId, credentialValues, runtime, prompter, options } = params;
     const resolvedAccount = resolveSignalAccount({ cfg, accountId });
-    const transport = resolvedAccount.transport;
+    const initialMode: SignalSetupMode =
+      resolvedAccount.configured && resolvedAccount.transport.kind !== "managed-native"
+        ? "existing-server"
+        : "local";
+    const mode = await prompter.select<SignalSetupMode>({
+      message: "How do you want to set up Signal for OpenClaw?",
+      initialValue: initialMode,
+      options: [
+        {
+          value: "local",
+          label: "Use local signal-cli",
+          hint: "Install, reuse, or link a local signal-cli account.",
+        },
+        {
+          value: "existing-server",
+          label: "Connect to an existing Signal server",
+          hint: "Validate an independently operated signal-cli or REST server.",
+        },
+      ],
+    });
+    if (mode === "existing-server") {
+      return await prepareSignalExistingServerSetup(params, resolvedAccount.transport);
+    }
+
+    const switchingToManaged = resolvedAccount.transport.kind !== "managed-native";
+    const transport = switchingToManaged
+      ? resolveSignalTransport(prepareSignalManagedNativeTransport({ cfg, accountId }))
+      : resolvedAccount.transport;
     if (transport.kind !== "managed-native") {
-      return undefined;
+      throw new Error("Signal setup did not resolve a managed signal-cli transport.");
+    }
+    const originalManagedAccount = normalizeSignalAccountInput(resolvedAccount.config.account);
+    const preparedCredentialValues: Record<string, string> = switchingToManaged
+      ? { [signalSetupStateKeys.transportKind]: "managed-native" }
+      : originalManagedAccount
+        ? {
+            [signalSetupStateKeys.managedReuseAccount]: originalManagedAccount,
+            [signalSetupStateKeys.managedReuseTransport]: managedSignalTransportIdentity(transport),
+          }
+        : {};
+    if (!options?.allowSignalInstall) {
+      return Object.keys(preparedCredentialValues).length > 0
+        ? { credentialValues: preparedCredentialValues }
+        : undefined;
     }
     let currentCliPath =
       (typeof credentialValues.cliPath === "string" ? credentialValues.cliPath : undefined) ??
@@ -90,7 +146,6 @@ export const signalSetupWizard: ChannelSetupWizard = {
       message: cliDetected ? t("wizard.signal.reinstallPrompt") : t("wizard.signal.installPrompt"),
       initialValue: !cliDetected,
     });
-    const preparedCredentialValues: Record<string, string> = {};
     if (wantsInstall) {
       await options?.beforePersistentEffect?.();
       try {
@@ -129,16 +184,16 @@ export const signalSetupWizard: ChannelSetupWizard = {
         ? { credentialValues: preparedCredentialValues }
         : undefined;
     }
-    const siblingAccounts = new Set(
-      listSignalAccountIds(cfg).flatMap((candidateAccountId) => {
-        const candidate = resolveSignalAccount({ cfg, accountId: candidateAccountId });
-        const account = normalizeSignalAccountInput(candidate.config.account);
-        return candidate.accountId !== resolvedAccount.accountId && account ? [account] : [];
-      }),
-    );
     const availableAccounts = existingAccounts.accounts.flatMap((account) => {
       const normalized = normalizeSignalAccountInput(account);
-      return normalized && !siblingAccounts.has(normalized) ? [normalized] : [];
+      return normalized &&
+        !isSignalAccountAssignedToSibling({
+          cfg,
+          accountId: resolvedAccount.accountId,
+          account: normalized,
+        })
+        ? [normalized]
+        : [];
     });
     const firstAvailableAccount = availableAccounts[0];
     if (firstAvailableAccount) {
@@ -209,13 +264,19 @@ export const signalSetupWizard: ChannelSetupWizard = {
     // Preserve that authoritative result even if cancellation raced its final output.
     preparedCredentialValues[SIGNAL_LINK_COMPLETED_INPUT_KEY] = "true";
     const linkedAccount = linkResult.associatedAccount;
-    if (siblingAccounts.has(linkedAccount)) {
+    try {
+      assertSignalAccountNotAssignedToSibling({
+        cfg,
+        accountId: resolvedAccount.accountId,
+        account: linkedAccount,
+      });
+    } catch (error) {
       // The device link succeeded, but this setup target must not claim a sibling's identity.
       // Abort before later setup inputs can create a transport-only target.
-      const error = new Error(
-        `${linkedAccount} is already assigned to another OpenClaw Signal account. Choose a different account or remove the existing assignment, then retry setup.`,
+      await prompter.note(
+        error instanceof Error ? error.message : String(error),
+        "Signal account linking",
       );
-      await prompter.note(error.message, "Signal account linking");
       throw error;
     }
     if (configuredAccount && linkedAccount !== configuredAccount) {
@@ -233,10 +294,83 @@ export const signalSetupWizard: ChannelSetupWizard = {
     preparedCredentialValues[SIGNAL_LINKED_ACCOUNT_INPUT_KEY] = "true";
     return { credentialValues: preparedCredentialValues };
   },
+  finalize: async (params) => {
+    const kind = params.credentialValues[signalSetupStateKeys.transportKind];
+    if (kind === "external-native" || kind === "container") {
+      return await finalizeSignalExistingServerSetup(params);
+    }
+    const resolvedAccount = resolveSignalAccount({ cfg: params.cfg, accountId: params.accountId });
+    if (kind !== "managed-native" && resolvedAccount.transport.kind !== "managed-native") {
+      return undefined;
+    }
+    const account = normalizeSignalAccountInput(resolvedAccount.config.account);
+    if (!account) {
+      throw new Error("Signal managed setup requires an account number before validation.");
+    }
+    const transport = prepareSignalManagedNativeTransport({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      overrides:
+        typeof params.credentialValues.cliPath === "string"
+          ? { cliPath: params.credentialValues.cliPath }
+          : undefined,
+    });
+    while (true) {
+      const probe = await probeManagedSignalSetup({
+        cfg: params.cfg,
+        accountId: params.accountId,
+        transport,
+        account,
+        reusableConfiguredAccount:
+          params.credentialValues[signalSetupStateKeys.managedReuseAccount],
+        reusableConfiguredTransport:
+          params.credentialValues[signalSetupStateKeys.managedReuseTransport],
+        runtime: params.runtime,
+        prompter: params.prompter,
+      });
+      if (probe.ok) {
+        if (params.credentialValues[SIGNAL_LINK_COMPLETED_INPUT_KEY] === "true") {
+          await params.prompter.note(
+            ["Signal setup validated.", ...signalSetupStatusLines].join("\n"),
+            t("wizard.signal.nextStepsTitle"),
+          );
+        }
+        return {
+          cfg: writeSignalAccountTransport({
+            cfg: params.cfg,
+            accountId: params.accountId,
+            transport,
+          }),
+        };
+      }
+      await params.prompter.note(
+        `OpenClaw could not validate this Signal setup.\n\n${probe.error ?? "Signal transport probe failed."}`,
+        "Signal setup",
+      );
+      const recovery = await params.prompter.select<"retry" | "stop">({
+        message: "How should Signal setup continue?",
+        options: [
+          { value: "retry", label: "Retry this setup" },
+          { value: "stop", label: "Stop Signal setup" },
+        ],
+        initialValue: "retry",
+      });
+      if (recovery === "stop") {
+        throw new WizardCancelledError("Signal setup stopped");
+      }
+    }
+  },
   credentials: [],
   textInputs: [
-    createSignalCliPathTextInput(async ({ cfg, accountId, currentValue }) => {
-      if (resolveSignalAccount({ cfg, accountId }).transport.kind !== "managed-native") {
+    createSignalCliPathTextInput(async ({ cfg, accountId, credentialValues, currentValue }) => {
+      const preparedKind = credentialValues[signalSetupStateKeys.transportKind];
+      if (preparedKind === "external-native" || preparedKind === "container") {
+        return false;
+      }
+      if (
+        preparedKind !== "managed-native" &&
+        resolveSignalAccount({ cfg, accountId }).transport.kind !== "managed-native"
+      ) {
         return false;
       }
       return !(await detectBinary(currentValue ?? "signal-cli"));

@@ -8,11 +8,16 @@ export type SignalTransportProbeResult = {
   ok: boolean;
   status?: number | null;
   error?: string | null;
+  failureKind?: "unverifiable-single-account";
 };
+
+export type SignalNativeAccountBinding = "selected-account" | "owner-known-bound-account";
 
 export type SignalNativeTransportProbe = (
   url: string,
   timeoutMs?: number,
+  account?: string,
+  accountBinding?: SignalNativeAccountBinding,
 ) => Promise<SignalTransportProbeResult>;
 
 export type SignalContainerTransportProbe = (

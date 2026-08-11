@@ -97,7 +97,7 @@ export async function probeSignalAccount(params: {
   transportKind: SignalTransportKind;
   account?: string;
 }): Promise<SignalProbe> {
-  // Container /about can succeed while this account's receive WebSocket cannot upgrade.
+  // Container /about can succeed while the selected account is absent or receive is unreachable.
   return await probeSignalTransport(
     params.baseUrl,
     params.timeoutMs,

@@ -51,6 +51,7 @@ import type { SignalTransportKind } from "./client-adapter.js";
 import { createSignalDaemonLifecycle } from "./daemon-lifecycle.js";
 import { spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
+import { registerSignalManagedDaemonOwner } from "./managed-daemon-runtime-context.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
 import type {
   SignalAttachment,
@@ -581,6 +582,21 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       runtime,
     });
     daemonLifecycle.attach(daemonHandle);
+    if (account) {
+      registerSignalManagedDaemonOwner({
+        channelRuntime: opts.channelRuntime,
+        handle: daemonHandle,
+        owner: {
+          accountId: accountInfo.accountId,
+          account,
+          cliPath,
+          ...(configPath ? { configPath } : {}),
+          httpHost,
+          httpPort,
+        },
+        abortSignal: daemonLifecycle.abortSignal,
+      });
+    }
   }
 
   const onAbort = () => void daemonLifecycle.stop();

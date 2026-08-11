@@ -404,20 +404,59 @@ describe("containerCheck", () => {
     expectFirstFetchCall("http://localhost:8080/v1/about");
   });
 
-  it("validates the receive WebSocket when an account is provided", async () => {
+  it("requires the account list before validating the receive WebSocket", async () => {
     wsMockState.behavior = "open";
-    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 }).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify(["+14259798283"])),
+    });
 
     const result = await containerCheck("http://localhost:8080", 1000, "+14259798283");
 
     expect(result).toEqual({ ok: true, status: 101, error: null });
+    expect(mockFetch.mock.calls[1]?.[0]).toBe("http://localhost:8080/v1/accounts");
     expect(wsMockState.urls).toEqual(["ws://localhost:8080/v1/receive/%2B14259798283"]);
     expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024 }]);
   });
 
+  it("rejects an account absent from the container account list", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 }).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify(["+14259798284"])),
+    });
+
+    await expect(containerCheck("http://localhost:8080", 1000, "+14259798283")).resolves.toEqual({
+      ok: false,
+      status: 200,
+      error: "Signal account +14259798283 is not linked on this container.",
+    });
+    expect(wsMockState.urls).toEqual([]);
+  });
+
+  it("rejects a malformed container account list", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 }).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify({ account: "+14259798283" })),
+    });
+
+    await expect(containerCheck("http://localhost:8080", 1000, "+14259798283")).resolves.toEqual({
+      ok: false,
+      status: 200,
+      error: "Signal container returned an invalid linked-account list.",
+    });
+    expect(wsMockState.urls).toEqual([]);
+  });
+
   it("rejects container receive endpoints that do not upgrade to WebSocket", async () => {
     wsMockState.behavior = "unexpected-response";
-    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 }).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify(["+14259798283"])),
+    });
 
     const result = await containerCheck("http://localhost:8080", 1000, "+14259798283");
 
@@ -430,7 +469,11 @@ describe("containerCheck", () => {
 
   it("rejects container receive endpoints that close before opening", async () => {
     wsMockState.behavior = "close";
-    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 }).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify(["+14259798283"])),
+    });
 
     const result = await containerCheck("http://localhost:8080", 1000, "+14259798283");
 
