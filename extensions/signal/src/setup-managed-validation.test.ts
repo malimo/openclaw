@@ -315,26 +315,58 @@ describe("probeManagedSignalSetup", () => {
     expect(mocks.spawnDaemon).not.toHaveBeenCalled();
   });
 
-  it("probes a separate connection URL with selected-account verification", async () => {
+  it("requires a separate connection URL to become healthy with the managed daemon", async () => {
     const candidate = { ...transport, url: "https://signal.example:9443" };
-    await probeManagedSignalSetup(
-      createParams(
-        {
-          channels: {
-            signal: {
-              accounts: {
-                work: { account, transport: candidate },
-              },
-            },
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            work: { account, transport: candidate },
           },
         },
-        candidate,
-      ),
-    );
+      },
+    } as OpenClawConfig;
+    mocks.probeTransport
+      .mockResolvedValueOnce({ ok: false, error: "connection refused" })
+      .mockResolvedValueOnce({ ok: true, status: 200 })
+      .mockResolvedValueOnce({ ok: true, status: 200 });
+
+    await expect(probeManagedSignalSetup(createParams(cfg, candidate))).resolves.toMatchObject({
+      ok: true,
+    });
 
     expect(mocks.probeTransport).toHaveBeenNthCalledWith(
-      2,
+      1,
       expect.not.objectContaining({ nativeAccountBinding: "owner-known-bound-account" }),
     );
+    expect(mocks.probeTransport).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ nativeAccountBinding: "owner-known-bound-account" }),
+    );
+    expect(mocks.probeTransport).toHaveBeenNthCalledWith(
+      3,
+      expect.not.objectContaining({ nativeAccountBinding: "owner-known-bound-account" }),
+    );
+  });
+
+  it("rejects a separate connection URL already served by an independent daemon", async () => {
+    const candidate = { ...transport, url: "https://signal.example:9443" };
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            work: { account, transport: candidate },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(probeManagedSignalSetup(createParams(cfg, candidate))).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining("external-native"),
+    });
+
+    expect(mocks.probeTransport).toHaveBeenCalledOnce();
+    expect(mocks.spawnDaemon).not.toHaveBeenCalled();
   });
 });

@@ -79,6 +79,18 @@ async function probeManagedBind(params: {
   return result;
 }
 
+function hasSeparateConnectionUrl(params: {
+  transport: SignalManagedNativeTransport;
+  resolved: ResolvedManagedSignalTransport;
+}): boolean {
+  return !isSignalManagedNativeConnectionUrlForBind({
+    ...params.transport,
+    url: params.resolved.baseUrl,
+    httpHost: params.resolved.httpHost,
+    httpPort: params.resolved.httpPort,
+  });
+}
+
 async function probeSeparateConnectionUrl(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -88,14 +100,7 @@ async function probeSeparateConnectionUrl(params: {
   abortSignal?: AbortSignal;
 }): Promise<SignalTransportProbeResult> {
   params.abortSignal?.throwIfAborted();
-  if (
-    isSignalManagedNativeConnectionUrlForBind({
-      ...params.transport,
-      url: params.resolved.baseUrl,
-      httpHost: params.resolved.httpHost,
-      httpPort: params.resolved.httpPort,
-    })
-  ) {
+  if (!hasSeparateConnectionUrl(params)) {
     return { ok: true, status: 200, error: null };
   }
   const result = await probeSignalTransport({
@@ -169,6 +174,16 @@ export async function probeManagedSignalSetup(params: {
       httpHost: resolved.httpHost,
       httpPort: resolved.httpPort,
     });
+    if (hasSeparateConnectionUrl({ ...params, resolved })) {
+      const preexistingConnection = await probeSeparateConnectionUrl({ ...params, resolved });
+      if (preexistingConnection.ok) {
+        return {
+          ok: false,
+          error:
+            "Signal managed connection URL was already serving the selected account before OpenClaw started its daemon. Use external-native for an independently operated Signal server.",
+        };
+      }
+    }
     params.abortSignal?.throwIfAborted();
     const spawnedDaemon = spawnSignalDaemon({
       cliPath: resolved.cliPath,
