@@ -10,7 +10,10 @@ import type { SignalDaemonHandle } from "./daemon.js";
 import { registerSignalManagedDaemonOwner } from "./managed-daemon-runtime-context.js";
 import { setSignalRuntime } from "./runtime.js";
 import { clearSignalRuntimeForTest } from "./runtime.test-support.js";
-import type { SignalTransportProbeResult } from "./setup-transport.js";
+import type {
+  SignalManagedNativeTransport,
+  SignalTransportProbeResult,
+} from "./setup-transport.js";
 
 const mocks = vi.hoisted(() => ({
   assertBindAvailable: vi.fn(async () => undefined),
@@ -65,7 +68,7 @@ const transport = {
 
 function createParams(
   cfg: OpenClawConfig = {},
-  candidate: typeof transport | (typeof transport & { url: string }) = transport,
+  candidate: SignalManagedNativeTransport = transport,
   reusableAccount?: string,
 ) {
   return {
@@ -171,6 +174,46 @@ describe("probeManagedSignalSetup", () => {
     try {
       await expect(
         probeManagedSignalSetup(createParams(cfg, transport, account)),
+      ).resolves.toMatchObject({ ok: true });
+      expect(mocks.probeTransport).toHaveBeenCalledWith(
+        expect.objectContaining({ nativeAccountBinding: "owner-known-bound-account" }),
+      );
+      expect(mocks.assertBindAvailable).not.toHaveBeenCalled();
+      expect(mocks.spawnDaemon).not.toHaveBeenCalled();
+    } finally {
+      await lifecycle.stop();
+    }
+  });
+
+  it("reuses the monitor-owned effective transport when config only names the account", async () => {
+    const cfg = {
+      channels: { signal: { accounts: { work: { account } } } },
+    } as OpenClawConfig;
+    const effectiveTransport = {
+      kind: "managed-native" as const,
+      cliPath: "signal-cli",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+    };
+    const lifecycle = createSignalDaemonLifecycle({});
+    const handle = mocks.spawnDaemon();
+    mocks.spawnDaemon.mockClear();
+    lifecycle.attach(handle);
+    registerSignalManagedDaemonOwner({
+      handle,
+      owner: {
+        accountId: "work",
+        account,
+        cliPath: effectiveTransport.cliPath,
+        httpHost: effectiveTransport.httpHost,
+        httpPort: effectiveTransport.httpPort,
+      },
+      abortSignal: lifecycle.abortSignal,
+    });
+
+    try {
+      await expect(
+        probeManagedSignalSetup(createParams(cfg, effectiveTransport, account)),
       ).resolves.toMatchObject({ ok: true });
       expect(mocks.probeTransport).toHaveBeenCalledWith(
         expect.objectContaining({ nativeAccountBinding: "owner-known-bound-account" }),

@@ -378,6 +378,54 @@ describe("Signal existing-server setup", () => {
     expect(queued.note).toHaveBeenCalledWith(expect.stringContaining("not ready"), "Signal setup");
   });
 
+  it("does not persist an unverified alias of a configured managed daemon", async () => {
+    mocks.probeSignalTransport.mockResolvedValue({
+      ok: false,
+      status: 200,
+      failureKind: "unverifiable-single-account",
+      error: "server account cannot be verified",
+    });
+    const cfg: OpenClawConfig = {
+      channels: {
+        signal: {
+          account: "+15555550123",
+          transport: { kind: "managed-native", httpHost: "127.0.0.1", httpPort: 8080 },
+        },
+      },
+    };
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["existing-server", "stop"],
+      textValues: ["http://custom-hosts-alias:8080"],
+    });
+    const prepared = await runSetupWizardPrepare({
+      prepare: signalSetupWizard.prepare,
+      cfg,
+      prompter: queued.prompter,
+      runtime: createRuntimeEnv({ throwOnExit: false }),
+    });
+
+    await expect(
+      runSetupWizardFinalize({
+        finalize: signalSetupWizard.finalize,
+        cfg,
+        credentialValues: toCredentialValues(prepared?.credentialValues),
+        prompter: queued.prompter,
+        runtime: createRuntimeEnv({ throwOnExit: false }),
+      }),
+    ).rejects.toBeInstanceOf(WizardCancelledError);
+
+    expect(queued.confirm).not.toHaveBeenCalled();
+    expect(cfg.channels?.signal?.transport).toEqual({
+      kind: "managed-native",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+    });
+    expect(queued.note).toHaveBeenCalledWith(
+      expect.stringContaining("server account cannot be verified"),
+      "Signal setup",
+    );
+  });
+
   it("rejects an alias of a managed daemon and accepts an independent server", async () => {
     mocks.networkInterfaces.mockImplementationOnce(() => {
       throw new Error("interface enumeration denied");

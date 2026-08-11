@@ -8,7 +8,6 @@ import { isSignalManagedDaemonOwned } from "./managed-daemon-runtime-context.js"
 import { assertSignalSetupDaemonBindAvailable } from "./setup-daemon-bind.js";
 import {
   probeSignalTransport,
-  resolveConfiguredSignalTransport,
   type SignalManagedNativeTransport,
   type SignalTransportProbeResult,
 } from "./setup-transport.js";
@@ -130,23 +129,19 @@ export async function probeManagedSignalSetup(params: {
   let daemon: ReturnType<typeof spawnSignalDaemon> | undefined;
   let result: SignalTransportProbeResult = { ok: false, error: "Signal transport probe failed." };
   try {
-    const configured = resolveConfiguredSignalTransport(params.cfg, params.accountId);
     const configuredAccountInfo = resolveSignalAccount({
       cfg: params.cfg,
       accountId: params.accountId,
     });
+    const configured = configuredAccountInfo.transport;
     const configuredAccount = normalizeOptionalString(configuredAccountInfo.config.account);
     if (
-      configured?.kind === "managed-native" &&
+      configured.kind === "managed-native" &&
       configuredAccount === params.account &&
       params.reusableConfiguredAccount === params.account &&
       params.reusableConfiguredTransport === managedSignalTransportIdentity(configured)
     ) {
-      const configuredResolved = resolveSignalTransport(configured);
-      if (
-        configuredResolved.kind === "managed-native" &&
-        sameManagedTransport(configuredResolved, resolved)
-      ) {
+      if (sameManagedTransport(configured, resolved)) {
         const ownerKnown = isSignalManagedDaemonOwned({
           accountId: configuredAccountInfo.accountId,
           account: params.account,
