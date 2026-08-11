@@ -305,6 +305,8 @@ export type SetupChannelsOptions = {
   allowDisable?: boolean;
   allowIMessageInstall?: boolean;
   allowSignalInstall?: boolean;
+  /** Abort owner-controlled setup work when the hosting wizard is cancelled. */
+  abortSignal?: AbortSignal;
   /** Revalidate host authority immediately before an installer or other durable effect. */
   beforePersistentEffect?: () => Promise<void>;
   onSelection?: (selection: ChannelId[]) => void;
