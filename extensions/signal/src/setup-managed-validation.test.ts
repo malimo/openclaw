@@ -26,9 +26,14 @@ const mocks = vi.hoisted(() => ({
       isExited: () => false,
     }),
   ),
-  waitForReady: vi.fn(async (params: { check: () => Promise<SignalTransportProbeResult> }) => {
-    await params.check();
-  }),
+  waitForReady: vi.fn(
+    async (params: {
+      abortSignal?: AbortSignal;
+      check: () => Promise<SignalTransportProbeResult>;
+    }) => {
+      await params.check();
+    },
+  ),
 }));
 
 vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
@@ -112,6 +117,34 @@ describe("probeManagedSignalSetup", () => {
     );
     expect(mocks.assertBindAvailable).not.toHaveBeenCalled();
     expect(mocks.spawnDaemon).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "localhost connection for an IPv4 loopback bind",
+      candidate: { ...transport, url: "http://localhost:8080" },
+    },
+    {
+      name: "IPv4 loopback connection for a localhost bind",
+      candidate: { ...transport, httpHost: "localhost", url: "http://127.0.0.1:8080" },
+    },
+  ])("does not re-probe the managed bind through $name", async ({ candidate }) => {
+    const cfg = {
+      channels: { signal: { accounts: { work: { account, transport: candidate } } } },
+    } as OpenClawConfig;
+
+    await expect(
+      probeManagedSignalSetup(createParams(cfg, candidate, account)),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(mocks.probeTransport).toHaveBeenCalledOnce();
+    expect(mocks.probeTransport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transport: expect.objectContaining({
+          url: `http://${candidate.httpHost}:8080`,
+        }),
+      }),
+    );
   });
 
   it("uses owner-known proof for the exact daemon registered by the monitor lifecycle", async () => {
@@ -206,6 +239,22 @@ describe("probeManagedSignalSetup", () => {
     expect(mocks.probeTransport).toHaveBeenCalledWith(
       expect.objectContaining({ nativeAccountBinding: "owner-known-bound-account" }),
     );
+    expect(mocks.stop).toHaveBeenCalledOnce();
+  });
+
+  it("passes setup cancellation to readiness and rethrows its reason after cleanup", async () => {
+    const abort = new AbortController();
+    const reason = new DOMException("setup cancelled", "AbortError");
+    mocks.waitForReady.mockImplementationOnce(async ({ abortSignal }) => {
+      expect(abortSignal).toBe(abort.signal);
+      abort.abort(reason);
+    });
+
+    await expect(
+      probeManagedSignalSetup({ ...createParams(), abortSignal: abort.signal }),
+    ).rejects.toBe(reason);
+
+    expect(mocks.spawnDaemon).toHaveBeenCalledOnce();
     expect(mocks.stop).toHaveBeenCalledOnce();
   });
 

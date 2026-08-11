@@ -12,6 +12,7 @@ import {
   type SignalManagedNativeTransport,
   type SignalTransportProbeResult,
 } from "./setup-transport.js";
+import { isSignalManagedNativeConnectionUrlForBind } from "./transport-policy.js";
 import { buildSignalTransportHttpUrl } from "./transport-url.js";
 
 type ResolvedManagedSignalTransport = Extract<
@@ -59,8 +60,10 @@ async function probeManagedBind(params: {
   resolved: ResolvedManagedSignalTransport;
   account: string;
   accountBinding: "selected-account" | "owner-known-bound-account";
+  abortSignal?: AbortSignal;
 }): Promise<SignalTransportProbeResult> {
-  return await probeSignalTransport({
+  params.abortSignal?.throwIfAborted();
+  const result = await probeSignalTransport({
     cfg: params.cfg,
     accountId: params.accountId,
     transport: {
@@ -73,6 +76,8 @@ async function probeManagedBind(params: {
     nativeAccountBinding: params.accountBinding,
     timeoutMs: 1_000,
   }).catch((error: unknown) => ({ ok: false, error: String(error) }));
+  params.abortSignal?.throwIfAborted();
+  return result;
 }
 
 async function probeSeparateConnectionUrl(params: {
@@ -81,18 +86,28 @@ async function probeSeparateConnectionUrl(params: {
   transport: SignalManagedNativeTransport;
   resolved: ResolvedManagedSignalTransport;
   account: string;
+  abortSignal?: AbortSignal;
 }): Promise<SignalTransportProbeResult> {
-  const bindUrl = buildSignalTransportHttpUrl(params.resolved.httpHost, params.resolved.httpPort);
-  if (params.resolved.baseUrl === bindUrl) {
+  params.abortSignal?.throwIfAborted();
+  if (
+    isSignalManagedNativeConnectionUrlForBind({
+      ...params.transport,
+      url: params.resolved.baseUrl,
+      httpHost: params.resolved.httpHost,
+      httpPort: params.resolved.httpPort,
+    })
+  ) {
     return { ok: true, status: 200, error: null };
   }
-  return await probeSignalTransport({
+  const result = await probeSignalTransport({
     cfg: params.cfg,
     accountId: params.accountId,
     transport: params.transport,
     account: params.account,
     timeoutMs: 1_000,
   }).catch((error: unknown) => ({ ok: false, error: String(error) }));
+  params.abortSignal?.throwIfAborted();
+  return result;
 }
 
 export async function probeManagedSignalSetup(params: {
@@ -104,7 +119,9 @@ export async function probeManagedSignalSetup(params: {
   reusableConfiguredTransport?: string;
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
+  abortSignal?: AbortSignal;
 }): Promise<SignalTransportProbeResult> {
+  params.abortSignal?.throwIfAborted();
   const resolved = resolveSignalTransport(params.transport);
   if (resolved.kind !== "managed-native") {
     throw new Error("Signal setup did not resolve a managed signal-cli transport.");
@@ -157,6 +174,7 @@ export async function probeManagedSignalSetup(params: {
       httpHost: resolved.httpHost,
       httpPort: resolved.httpPort,
     });
+    params.abortSignal?.throwIfAborted();
     const spawnedDaemon = spawnSignalDaemon({
       cliPath: resolved.cliPath,
       ...(resolved.configPath ? { configPath: resolved.configPath } : {}),
@@ -176,6 +194,7 @@ export async function probeManagedSignalSetup(params: {
       logAfterMs: 10_000,
       logIntervalMs: 10_000,
       pollIntervalMs: 150,
+      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
       runtime: params.runtime,
       check: async () => {
         if (spawnedDaemon.isExited()) {
@@ -189,18 +208,26 @@ export async function probeManagedSignalSetup(params: {
         return result;
       },
     });
+    params.abortSignal?.throwIfAborted();
     if (result.ok) {
       result = await probeSeparateConnectionUrl({ ...params, resolved });
     }
     return result;
   } catch (error) {
+    params.abortSignal?.throwIfAborted();
     result = { ok: false, error: String(error) };
     return result;
   } finally {
     try {
       await daemon?.stop();
     } finally {
-      progress.stop(result.ok ? "Signal setup validated." : "Signal setup validation failed.");
+      progress.stop(
+        params.abortSignal?.aborted
+          ? "Signal setup validation cancelled."
+          : result.ok
+            ? "Signal setup validated."
+            : "Signal setup validation failed.",
+      );
     }
   }
 }

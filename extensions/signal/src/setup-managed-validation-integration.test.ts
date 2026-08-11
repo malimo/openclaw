@@ -145,4 +145,38 @@ describe("Signal managed setup validation wiring", () => {
       }),
     );
   });
+
+  it("propagates setup cancellation without entering readiness recovery", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        signal: {
+          account: "+15555550123",
+          transport: { kind: "managed-native", httpPort: 8080 },
+        },
+      },
+    };
+    const { queued, credentialValues } = await prepareLocal(cfg);
+    const abort = new AbortController();
+    const reason = new DOMException("setup cancelled", "AbortError");
+    mocks.probeManagedSignalSetup.mockImplementationOnce(async (params) => {
+      expect(params.abortSignal).toBe(abort.signal);
+      abort.abort(reason);
+      params.abortSignal?.throwIfAborted();
+      return { ok: false };
+    });
+
+    await expect(
+      runSetupWizardFinalize({
+        finalize: signalSetupWizard.finalize,
+        cfg,
+        credentialValues,
+        prompter: queued.prompter,
+        runtime: createRuntimeEnv({ throwOnExit: false }),
+        options: { abortSignal: abort.signal },
+      }),
+    ).rejects.toBe(reason);
+
+    expect(queued.select).toHaveBeenCalledTimes(1);
+    expect(queued.note).not.toHaveBeenCalledWith(expect.any(String), "Signal setup");
+  });
 });

@@ -327,6 +327,7 @@ export const signalSetupWizard: ChannelSetupWizard = {
           params.credentialValues[signalSetupStateKeys.managedReuseTransport],
         runtime: params.runtime,
         prompter: params.prompter,
+        ...(params.options?.abortSignal ? { abortSignal: params.options.abortSignal } : {}),
       });
       if (probe.ok) {
         if (params.credentialValues[SIGNAL_LINK_COMPLETED_INPUT_KEY] === "true") {
