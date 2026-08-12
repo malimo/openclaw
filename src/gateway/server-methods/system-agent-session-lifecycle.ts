@@ -5,6 +5,7 @@ import {
 import type { GatewayRequestContext } from "./types.js";
 
 type SystemAgentSessions = GatewayRequestContext["systemAgentSessions"];
+type SystemAgentSession = SystemAgentSessions extends Map<string, infer Session> ? Session : never;
 type WizardSessions = GatewayRequestContext["wizardSessions"];
 type GatewayWizardSession = WizardSessions extends Map<string, infer Session> ? Session : never;
 type ApprovalManager = NonNullable<GatewayRequestContext["systemAgentApprovalManager"]>;
@@ -75,13 +76,33 @@ export function admitWizard(
 }
 
 function expireSessionApproval(
-  session: SystemAgentSessions extends Map<string, infer Session> ? Session : never,
+  session: SystemAgentSession,
   approvalManager: ApprovalManager | undefined,
   reason: string,
 ): void {
   if (session.pendingApproval) {
     approvalManager?.expire(session.pendingApproval.id, reason);
   }
+}
+
+export function disposeSystemAgentSession(params: {
+  sessions: SystemAgentSessions;
+  sessionId: string;
+  session: SystemAgentSession;
+  approvalManager?: ApprovalManager;
+  reason: string;
+}): Promise<void> {
+  const ownsEntry = params.sessions.get(params.sessionId) === params.session;
+  if (ownsEntry) {
+    params.sessions.delete(params.sessionId);
+  }
+  // Register disposal in the same turn as removal so shutdown sees either the
+  // live map entry or its cleanup, including when approval expiry throws.
+  const disposal = trackDisposal(params.sessions, params.session.engine.dispose());
+  if (ownsEntry) {
+    expireSessionApproval(params.session, params.approvalManager, params.reason);
+  }
+  return disposal;
 }
 
 export function disposeSystemAgentSessionsForOwner(params: {
@@ -94,9 +115,15 @@ export function disposeSystemAgentSessionsForOwner(params: {
     if (session.ownerKey !== params.ownerKey) {
       continue;
     }
-    params.sessions.delete(sessionId);
-    expireSessionApproval(session, params.approvalManager, "session-owner-disconnected");
-    disposals.push(session.engine.dispose());
+    disposals.push(
+      disposeSystemAgentSession({
+        sessions: params.sessions,
+        sessionId,
+        session,
+        approvalManager: params.approvalManager,
+        reason: "session-owner-disconnected",
+      }),
+    );
   }
   const disposal = Promise.allSettled(disposals).then((results) => {
     const errors = results.flatMap((result) =>
@@ -121,14 +148,20 @@ export function retireAndDisposeSystemAgentSessions(params: {
     ...(pendingWizardAdmissions.get(params.wizardSessions) ?? []),
   ];
   for (const [sessionId, session] of params.sessions) {
-    params.sessions.delete(sessionId);
-    expireSessionApproval(session, params.approvalManager, "gateway-shutdown");
-    disposals.push(session.engine.dispose());
+    disposals.push(
+      disposeSystemAgentSession({
+        sessions: params.sessions,
+        sessionId,
+        session,
+        approvalManager: params.approvalManager,
+        reason: "gateway-shutdown",
+      }),
+    );
   }
   for (const [sessionId, session] of params.wizardSessions) {
     params.wizardSessions.delete(sessionId);
     session.cancel();
-    disposals.push(session.whenSettled());
+    disposals.push(whenAdmittedWizardSessionSettled(session));
   }
   const disposal = Promise.allSettled(disposals).then((results) => {
     const errors = results.flatMap((result) =>

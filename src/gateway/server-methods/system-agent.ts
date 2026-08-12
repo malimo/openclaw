@@ -65,8 +65,11 @@ import {
   getSystemAgentChatInputError,
   runSystemAgentChatInput,
 } from "./system-agent-chat-turn.js";
-import { admitWizard } from "./system-agent-session-lifecycle.js";
-import { assertSystemAgentSessionStoreActive } from "./system-agent-session-lifecycle.js";
+import {
+  admitWizard,
+  assertSystemAgentSessionStoreActive,
+  disposeSystemAgentSession,
+} from "./system-agent-session-lifecycle.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -187,11 +190,15 @@ async function evictOldestSession(
   }
   if (oldestKey !== undefined) {
     const oldest = sessions.get(oldestKey);
-    if (oldest?.pendingApproval) {
-      context.systemAgentApprovalManager?.expire(oldest.pendingApproval.id, "session-evicted");
+    if (oldest) {
+      await disposeSystemAgentSession({
+        sessions,
+        sessionId: oldestKey,
+        session: oldest,
+        approvalManager: context.systemAgentApprovalManager,
+        reason: "session-evicted",
+      });
     }
-    sessions.delete(oldestKey);
-    await oldest?.engine.dispose();
     return true;
   }
   return false;
@@ -586,14 +593,15 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           const existing = sessions.get(sessionId);
           // Persist the reset first; a failed write must leave the live session intact.
           appendTranscriptReset();
-          sessions.delete(sessionId);
-          if (existing?.pendingApproval) {
-            context.systemAgentApprovalManager?.expire(
-              existing.pendingApproval.id,
-              "session-reset",
-            );
+          if (existing) {
+            await disposeSystemAgentSession({
+              sessions,
+              sessionId,
+              session: existing,
+              approvalManager: context.systemAgentApprovalManager,
+              reason: "session-reset",
+            });
           }
-          await existing?.engine.dispose();
         }
         let session = sessions.get(sessionId);
         if (
@@ -808,11 +816,14 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           // exact engine before cleanup so a retry must pass the live gate and
           // cannot resume partial proposal or CLI-session state.
           // Initialization failures stay unmarked because no live session existed.
-          if (sessions.get(sessionId)?.engine === session.engine) {
-            sessions.delete(sessionId);
-          }
           try {
-            await session.engine.dispose();
+            await disposeSystemAgentSession({
+              sessions,
+              sessionId,
+              session,
+              approvalManager: context.systemAgentApprovalManager,
+              reason: "inference-unavailable",
+            });
           } catch {
             // The inference error is authoritative; cleanup stays best-effort.
           }

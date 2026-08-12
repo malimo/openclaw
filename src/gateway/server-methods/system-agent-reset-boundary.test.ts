@@ -4,6 +4,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { closeOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -12,6 +13,7 @@ import { SystemAgentInferenceUnavailableError } from "../../system-agent/inferen
 import { createSystemAgentVerifiedInferenceTestFixture } from "../../system-agent/system-agent.test-helpers.js";
 import { appendTranscriptTurn, readTranscriptTail } from "../../system-agent/transcript-store.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { retireAndDisposeSystemAgentSessions } from "./system-agent-session-lifecycle.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -236,6 +238,37 @@ describe("openclaw.chat reset boundary", () => {
 
       expect(sessions.has("s1")).toBe(false);
       expect(nextSessionSeed()).toEqual([]);
+    });
+  });
+
+  it("keeps discarded session cleanup joined to Gateway retirement", async () => {
+    await withTranscriptState("openclaw-reset-boundary-retirement-", async () => {
+      const cleanupStarted = createDeferred();
+      const releaseCleanup = createDeferred();
+      const sessions = discardableSessions(async () => {
+        cleanupStarted.resolve();
+        await releaseCleanup.promise;
+      });
+      const reset = resetSession({ sessions });
+
+      await cleanupStarted.promise;
+      let retirementResolved = false;
+      const retirement = retireAndDisposeSystemAgentSessions({
+        sessions,
+        wizardSessions: new Map(),
+      }).then(() => {
+        retirementResolved = true;
+      });
+
+      try {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(retirementResolved).toBe(false);
+      } finally {
+        releaseCleanup.resolve();
+        await Promise.allSettled([reset, retirement]);
+      }
     });
   });
 });

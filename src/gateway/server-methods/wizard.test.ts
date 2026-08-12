@@ -45,8 +45,9 @@ import {
   runExclusiveSystemAgentSetupActivation,
   whenAdmittedWizardSessionSettled,
 } from "./setup-admission.js";
+import { retireAndDisposeSystemAgentSessions } from "./system-agent-session-lifecycle.js";
 import { systemAgentHandlers } from "./system-agent.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 import { type SetupWizardRunner, wizardHandlers } from "./wizard.js";
 
 afterEach(() => {
@@ -534,6 +535,54 @@ describe("wizard setup ownership", () => {
       if (admittedSession) {
         await whenAdmittedWizardSessionSettled(admittedSession);
       }
+      await cancelWizardSessions(tracker.wizardSessions);
+      setupTargetLock.beforeRelease = undefined;
+      setupTargetLock.releaseReached = undefined;
+    }
+  });
+
+  it("keeps Gateway retirement joined to setup-target lock release", async () => {
+    const runnerSettled = createDeferred();
+    const releaseSetupTargetLock = createDeferred();
+    const setupTargetLockReleaseReached = createDeferred();
+    setupTargetLock.beforeRelease = releaseSetupTargetLock.promise;
+    setupTargetLock.releaseReached = setupTargetLockReleaseReached.resolve;
+    const tracker = createWizardSessionTracker();
+    const context = {
+      ...tracker,
+      wizardRunner: async (_opts: unknown, _runtime: RuntimeEnv, prompter: WizardPrompter) => {
+        prompter.progress("working");
+        await runnerSettled.promise;
+      },
+    };
+
+    try {
+      const startRespond = vi.fn();
+      await expectDefined(
+        wizardHandlers["wizard.start"],
+        "wizard.start test invariant",
+      )({ params: { mode: "local" }, respond: startRespond, context } as never);
+      const [, start] = startRespond.mock.calls[0] ?? [];
+      expect(start).toMatchObject({ status: "running" });
+
+      runnerSettled.resolve();
+      await setupTargetLockReleaseReached.promise;
+      let retirementResolved = false;
+      const retirement = retireAndDisposeSystemAgentSessions({
+        sessions: new Map() as GatewayRequestContext["systemAgentSessions"],
+        wizardSessions: tracker.wizardSessions,
+      }).then(() => {
+        retirementResolved = true;
+      });
+
+      await Promise.resolve();
+      expect(retirementResolved).toBe(false);
+      releaseSetupTargetLock.resolve();
+      await retirement;
+      expect(retirementResolved).toBe(true);
+    } finally {
+      runnerSettled.resolve();
+      releaseSetupTargetLock.resolve();
       await cancelWizardSessions(tracker.wizardSessions);
       setupTargetLock.beforeRelease = undefined;
       setupTargetLock.releaseReached = undefined;
