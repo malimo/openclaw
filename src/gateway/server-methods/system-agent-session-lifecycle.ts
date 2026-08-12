@@ -35,6 +35,23 @@ function trackDisposal(sessions: SystemAgentSessions, disposal: Promise<void>): 
   return disposal;
 }
 
+function settleCleanupTasks(
+  tasks: Iterable<PromiseLike<unknown>>,
+  describeFailure: (errorCount: number) => string,
+): Promise<void> {
+  return Promise.allSettled(tasks).then((results) => {
+    const errors = results.flatMap((result) => {
+      if (result.status !== "rejected") {
+        return [];
+      }
+      return result.reason instanceof AggregateError ? result.reason.errors : [result.reason];
+    });
+    if (errors.length > 0) {
+      throw new AggregateError(errors, describeFailure(errors.length));
+    }
+  });
+}
+
 function trackWizardAdmission(
   sessions: WizardSessions,
   admission: Promise<GatewayWizardSession | undefined>,
@@ -75,16 +92,6 @@ export function admitWizard(
   return trackWizardAdmission(sessions, admission);
 }
 
-function expireSessionApproval(
-  session: SystemAgentSession,
-  approvalManager: ApprovalManager | undefined,
-  reason: string,
-): void {
-  if (session.pendingApproval) {
-    approvalManager?.expire(session.pendingApproval.id, reason);
-  }
-}
-
 export function disposeSystemAgentSession(params: {
   sessions: SystemAgentSessions;
   sessionId: string;
@@ -99,10 +106,21 @@ export function disposeSystemAgentSession(params: {
   // Register disposal in the same turn as removal so shutdown sees either the
   // live map entry or its cleanup, including when approval expiry throws.
   const disposal = trackDisposal(params.sessions, params.session.engine.dispose());
-  if (ownsEntry) {
-    expireSessionApproval(params.session, params.approvalManager, params.reason);
+  if (!ownsEntry || !params.session.pendingApproval || !params.approvalManager) {
+    return disposal;
   }
-  return disposal;
+  let approvalExpiration = Promise.resolve();
+  try {
+    params.approvalManager.expire(params.session.pendingApproval.id, params.reason);
+  } catch (error) {
+    // Durable-store faults stay asynchronous so one approval cannot skip sibling cleanup.
+    approvalExpiration = Promise.reject(error);
+  }
+  const cleanup = settleCleanupTasks(
+    [disposal, approvalExpiration],
+    (errorCount) => `Failed to clean up ${errorCount} OpenClaw session resource(s)`,
+  );
+  return trackDisposal(params.sessions, cleanup);
 }
 
 export function disposeSystemAgentSessionsForOwner(params: {
@@ -125,14 +143,10 @@ export function disposeSystemAgentSessionsForOwner(params: {
       }),
     );
   }
-  const disposal = Promise.allSettled(disposals).then((results) => {
-    const errors = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (errors.length > 0) {
-      throw new AggregateError(errors, `Failed to dispose ${errors.length} OpenClaw session(s)`);
-    }
-  });
+  const disposal = settleCleanupTasks(
+    disposals,
+    (errorCount) => `Failed to dispose ${errorCount} OpenClaw session(s)`,
+  );
   return trackDisposal(params.sessions, disposal);
 }
 
@@ -163,13 +177,9 @@ export function retireAndDisposeSystemAgentSessions(params: {
     session.cancel();
     disposals.push(whenAdmittedWizardSessionSettled(session));
   }
-  const disposal = Promise.allSettled(disposals).then((results) => {
-    const errors = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (errors.length > 0) {
-      throw new AggregateError(errors, `Failed to settle ${errors.length} Gateway setup owner(s)`);
-    }
-  });
+  const disposal = settleCleanupTasks(
+    disposals,
+    (errorCount) => `Failed to settle ${errorCount} Gateway setup owner(s)`,
+  );
   return trackDisposal(params.sessions, disposal);
 }

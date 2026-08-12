@@ -61,6 +61,88 @@ describe("system-agent session lifecycle", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
+  it("continues retirement after approval expiry fails and joins every cleanup", async () => {
+    const releaseFirstDisposal = createDeferred();
+    const releaseSecondDisposal = createDeferred();
+    const wizardSettled = createDeferred();
+    const approvalError = new Error("approval store unavailable");
+    const disposalError = new Error("second disposal failed");
+    const firstDispose = vi.fn(async () => await releaseFirstDisposal.promise);
+    const secondDispose = vi.fn(async () => {
+      await releaseSecondDisposal.promise;
+      throw disposalError;
+    });
+    const firstSession = session("device:one", firstDispose);
+    firstSession.pendingApproval = { id: "approval-one" } as Session["pendingApproval"];
+    const secondSession = session("device:two", secondDispose);
+    secondSession.pendingApproval = { id: "approval-two" } as Session["pendingApproval"];
+    const sessions = new Map([
+      ["first", firstSession],
+      ["second", secondSession],
+    ]) as Sessions;
+    const cancel = vi.fn(() => true);
+    const wizardSessions = new Map([
+      [
+        "wizard",
+        {
+          cancel,
+          whenSettled: () => wizardSettled.promise,
+        },
+      ],
+    ]) as unknown as GatewayRequestContext["wizardSessions"];
+    const expire = vi.fn((approvalId: string) => {
+      if (approvalId === "approval-one") {
+        throw approvalError;
+      }
+      return true;
+    });
+    let synchronousError: unknown;
+    let retirement: Promise<void> | undefined;
+
+    try {
+      retirement = retireAndDisposeSystemAgentSessions({
+        sessions,
+        wizardSessions,
+        approvalManager: { expire } as GatewayRequestContext["systemAgentApprovalManager"],
+      });
+    } catch (error) {
+      synchronousError = error;
+    }
+
+    expect(synchronousError).toBeUndefined();
+    expect(retirement).toBeDefined();
+    expect(sessions.size).toBe(0);
+    expect(wizardSessions.size).toBe(0);
+    expect(firstDispose).toHaveBeenCalledOnce();
+    expect(secondDispose).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(expire).toHaveBeenCalledTimes(2);
+
+    let retirementSettled = false;
+    void retirement?.then(
+      () => {
+        retirementSettled = true;
+      },
+      () => {
+        retirementSettled = true;
+      },
+    );
+    releaseFirstDisposal.resolve();
+    releaseSecondDisposal.resolve();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(retirementSettled).toBe(false);
+
+    wizardSettled.resolve();
+    const failure = await retirement?.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([approvalError, disposalError]);
+  });
+
   it("joins an admitted wizard that reaches registration during shutdown", async () => {
     const runnerSettled = createDeferred();
     const cancel = vi.fn(() => true);
