@@ -136,6 +136,10 @@ snapshot, so re-read them on every reconnect.
 
 ### Present system-agent QR codes
 
+System-agent setup is administrative. Request `operator.admin` when pairing the
+device; every `openclaw.chat` call in this flow, including setup, polling,
+cancellation, and reset, requires that scope.
+
 Advertise `GATEWAY_CLIENT_CAPS.SYSTEM_AGENT_QR_CODE` only when the client can
 render a QR image. A capable `openclaw.chat` session can then receive a QR
 `step` through the same wizard-step contract used for other setup controls:

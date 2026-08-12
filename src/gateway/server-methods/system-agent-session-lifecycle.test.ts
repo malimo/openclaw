@@ -216,4 +216,31 @@ describe("system-agent session lifecycle", () => {
     await retirementSettlement;
     expect(sessions.size).toBe(0);
   });
+
+  it("retains a settled initialization cleanup failure until retirement reports it once", async () => {
+    const requestError = new Error("request failed before retirement");
+    const cleanupError = new Error("cleanup failed before retirement");
+    const sessions = new Map() as Sessions;
+    const wizardSessions = new Map() as GatewayRequestContext["wizardSessions"];
+    const initialization = initializeSystemAgentSession(
+      sessions,
+      "failed-session",
+      async ({ ownEngine }) => {
+        ownEngine(
+          session("device:one", async () => {
+            throw cleanupError;
+          }).engine,
+        );
+        throw requestError;
+      },
+    );
+
+    await expect(initialization).rejects.toBe(requestError);
+    await expect(
+      retireAndDisposeSystemAgentSessions({ sessions, wizardSessions }),
+    ).rejects.toMatchObject({ errors: [cleanupError] });
+    await expect(
+      retireAndDisposeSystemAgentSessions({ sessions, wizardSessions }),
+    ).resolves.toBeUndefined();
+  });
 });

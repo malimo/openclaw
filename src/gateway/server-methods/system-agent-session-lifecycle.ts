@@ -14,6 +14,7 @@ type ApprovalManager = NonNullable<GatewayRequestContext["systemAgentApprovalMan
 
 const retiredStores = new WeakSet<SystemAgentSessions>();
 const pendingSessionSettlements = new WeakMap<SystemAgentSessions, Set<Promise<void>>>();
+const settledInitializationCleanupFailures = new WeakMap<SystemAgentSessions, Error[]>();
 const retiredWizardStores = new WeakSet<WizardSessions>();
 const pendingWizardAdmissions = new WeakMap<
   WizardSessions,
@@ -77,8 +78,14 @@ export function initializeSystemAgentSession(
         await uncommittedEngine?.dispose();
         settlement.resolve();
       } catch (error) {
-        // Cleanup belongs to the retiring owner, while the request keeps its original outcome.
-        settlement.reject(error);
+        const cleanupError = toErrorObject(error, "Unknown system-agent cleanup failure");
+        if (!retiredStores.has(sessions)) {
+          const failures = settledInitializationCleanupFailures.get(sessions) ?? [];
+          failures.push(cleanupError);
+          settledInitializationCleanupFailures.set(sessions, failures);
+        }
+        // Retirement already snapshots an in-flight lease; only earlier failures need escrow.
+        settlement.reject(cleanupError);
       }
     }
   })();
@@ -209,8 +216,12 @@ export function retireAndDisposeSystemAgentSessions(params: {
 }): Promise<void> {
   retiredStores.add(params.sessions);
   retiredWizardStores.add(params.wizardSessions);
+  const settledInitializationFailures =
+    settledInitializationCleanupFailures.get(params.sessions) ?? [];
+  settledInitializationCleanupFailures.delete(params.sessions);
   const disposals: Promise<unknown>[] = [
     ...(pendingSessionSettlements.get(params.sessions) ?? []),
+    ...settledInitializationFailures.map((error) => Promise.reject(error)),
     ...(pendingWizardAdmissions.get(params.wizardSessions) ?? []),
   ];
   for (const [sessionId, session] of params.sessions) {
