@@ -92,7 +92,9 @@ import { assertValidParams } from "./validation.js";
 export type SystemAgentChatSession =
   GatewayRequestContext["systemAgentSessions"] extends Map<string, infer Session> ? Session : never;
 
-const MAX_SYSTEM_AGENT_SESSIONS = 8;
+const MAX_SYSTEM_AGENT_ACTIVE_SESSIONS = 8;
+// Recovery entries free active capacity without making retained engines unbounded.
+const MAX_SYSTEM_AGENT_SESSION_ENTRIES = 16;
 const SYSTEM_AGENT_SEED_HISTORY_LIMIT = 30;
 const DEFAULT_SYSTEM_AGENT_HISTORY_LIMIT = 100;
 const PROVIDER_AUTH_SESSION_TIMEOUT_MS = 25 * 60 * 1000;
@@ -164,11 +166,15 @@ async function evictOldestSession(
   sessions: Map<string, SystemAgentChatSession>,
   context: GatewayRequestContext,
 ): Promise<boolean> {
-  if (sessions.size < MAX_SYSTEM_AGENT_SESSIONS) {
-    return true;
-  }
+  let activeSessionCount = 0;
   const protectedQrSessions = new Map<string, { key: string; lastUsedAt: number }>();
+  const recoveryKeys = new Set<string>();
   for (const [key, session] of sessions) {
+    if (session.engine.hasRecoverableQrReply()) {
+      recoveryKeys.add(key);
+      continue;
+    }
+    activeSessionCount += 1;
     if (!session.engine.hasPendingQrCode()) {
       continue;
     }
@@ -177,11 +183,19 @@ async function evictOldestSession(
       protectedQrSessions.set(session.ownerKey, { key, lastUsedAt: session.lastUsedAt });
     }
   }
+  if (
+    activeSessionCount < MAX_SYSTEM_AGENT_ACTIVE_SESSIONS &&
+    sessions.size < MAX_SYSTEM_AGENT_SESSION_ENTRIES
+  ) {
+    return true;
+  }
   const protectedKeys = new Set([...protectedQrSessions.values()].map(({ key }) => key));
   let oldestKey: string | undefined;
   let oldestAt = Number.POSITIVE_INFINITY;
   for (const [key, session] of sessions) {
-    if (protectedKeys.has(key)) {
+    // Recovery leases are a separate bounded pool: admission may use the freed
+    // active slot, but cannot destroy a terminal reply whose delivery was lost.
+    if (protectedKeys.has(key) || recoveryKeys.has(key)) {
       continue;
     }
     if (session.lastUsedAt < oldestAt) {
@@ -711,7 +725,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
                   undefined,
                   errorShape(
                     ErrorCodes.UNAVAILABLE,
-                    "OpenClaw chat capacity is reserved for active QR operations; try again after one completes.",
+                    "OpenClaw chat capacity is reserved for active or recoverable QR operations; try again after one completes.",
                     { retryable: true },
                   ),
                 );

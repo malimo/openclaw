@@ -53,6 +53,10 @@ export type ChatWizardAnswerResult = ChatWizardResult & {
   userHistoryText: string;
 };
 
+export type ChatWizardCancellation = {
+  finish: () => Promise<ChatWizardAnswerResult>;
+};
+
 export type ChatWizardHostDependencies = {
   runChannelSetupWizard?: (
     channel: string,
@@ -109,6 +113,13 @@ let hostedRuntimePromise: Promise<HostedRuntime> | undefined;
 
 function loadHostedRuntime(): Promise<HostedRuntime> {
   return (hostedRuntimePromise ??= import("./hosted-setup.runtime.js"));
+}
+
+function renderWizardCancellation(label: string): ChatWizardResult {
+  return {
+    text: `${label[0]?.toUpperCase() ?? "S"}${label.slice(1)} setup cancelled. Nothing was changed beyond completed steps.`,
+    configWritten: false,
+  };
 }
 
 export class SystemAgentWizardAnswerError extends Error {}
@@ -217,7 +228,7 @@ export class ChatWizardHost {
     };
   }
 
-  async cancel(cancel: SystemAgentWizardCancel): Promise<ChatWizardAnswerResult> {
+  requestCancellation(cancel: SystemAgentWizardCancel): ChatWizardCancellation {
     const bridge = this.bridge;
     const step = bridge?.step;
     if (!bridge) {
@@ -233,8 +244,20 @@ export class ChatWizardHost {
     if (!bridge.session.cancel()) {
       throw new SystemAgentWizardAnswerError("The hosted wizard cannot be cancelled right now.");
     }
-    await bridge.session.whenSettled();
-    return { ...(await this.pump()), userHistoryText: "Cancel" };
+    return {
+      finish: async () => {
+        await bridge.session.whenSettled();
+        const result = await this.pump();
+        return {
+          ...(result.text ? result : renderWizardCancellation(bridge.label)),
+          userHistoryText: "Cancel",
+        };
+      },
+    };
+  }
+
+  async cancel(cancel: SystemAgentWizardCancel): Promise<ChatWizardAnswerResult> {
+    return await this.requestCancellation(cancel).finish();
   }
 
   /** Observe a QR-owned step without answering the dependency-owned prompt. */
@@ -689,10 +712,7 @@ export class ChatWizardHost {
         }
       }
       if (result.status === "cancelled") {
-        return {
-          text: `${label[0]?.toUpperCase() ?? "S"}${label.slice(1)} setup cancelled. Nothing was changed beyond completed steps.`,
-          configWritten: false,
-        };
+        return renderWizardCancellation(label);
       }
       return {
         text: `${label[0]?.toUpperCase() ?? "S"}${label.slice(1)} setup stopped: ${result.error ?? "unknown error"}`,

@@ -172,6 +172,7 @@ type GatewaySystemAgentSession = {
     historyLength: () => number;
     historySince: (index: number) => SystemAgentHistoryTurn[];
     hasPendingQrCode: () => boolean;
+    hasRecoverableQrReply: () => boolean;
     getPendingOperatorProposal: () => { operation: SystemAgentOperation; hash: string } | null;
     resolveOperatorApproval: (
       decision: "allow-once" | "allow-always" | "deny" | null,

@@ -889,6 +889,29 @@ describe("openclaw.chat", () => {
       client: defaultClient,
     } as never);
 
+    const lostDeliverySession = expectDefined(sessions.get("s1"), "lost delivery session");
+    lostDeliverySession.lastUsedAt = 0;
+    const otherRetainedEngines = await Promise.all(
+      Array.from({ length: 7 }, async () => await makeDeliveredQrEngine()),
+    );
+    for (const [index, retainedEngine] of otherRetainedEngines.entries()) {
+      sessions.set(
+        `delivered-${index}`,
+        seededSession({
+          engine: retainedEngine,
+          lastUsedAt: index + 1,
+          ownerKey: `device:owner-${index}`,
+        }),
+      );
+    }
+    stubEngineOverview();
+
+    const admission = await callChat(context, { sessionId: "new-session" });
+    expect(admission).toMatchObject({ ok: true });
+    expect(sessions.has("s1")).toBe(true);
+    expect(sessions.has("new-session")).toBe(true);
+    expect(sessions.size).toBe(9);
+
     const persistedTerminal = transcriptStoreMocks.appendTranscriptTurn.mock.calls.filter(
       ([turn]) => turn.role === "assistant" && turn.text.includes("is configured"),
     );
@@ -1238,31 +1261,25 @@ describe("openclaw.chat", () => {
     );
   });
 
-  it("admits a new session when eight retained QR terminals were already delivered", async () => {
-    const engines = await Promise.all(
-      Array.from({ length: 8 }, async () => await makeDeliveredQrEngine()),
-    );
-    expect(engines.map((engine) => engine.hasPendingQrCode())).toEqual(
-      Array.from({ length: 8 }, () => false),
-    );
-    const sessions = new Map<string, SystemAgentChatSession>(
-      engines.map((engine, index) => [
-        `delivered-${index}`,
-        seededSession({
-          engine,
-          lastUsedAt: index,
-          ownerKey: `device:owner-${index}`,
-        }),
-      ]),
-    );
+  it("bounds retained QR recovery sessions without evicting their live leases", async () => {
+    const sessions = new Map<string, SystemAgentChatSession>();
+    for (let index = 0; index < 16; index += 1) {
+      const recoverySession = seededSession({
+        lastUsedAt: index,
+        ownerKey: `device:recovery-owner-${index}`,
+      });
+      vi.spyOn(recoverySession.engine, "hasRecoverableQrReply").mockReturnValue(true);
+      sessions.set(`recovery-${index}`, recoverySession);
+    }
     stubEngineOverview();
 
-    const result = await callChat(makeContext(sessions), { sessionId: "new-session" });
+    const result = await callChat(makeContext(sessions), { sessionId: "overflow" });
 
-    expect(result).toMatchObject({ ok: true });
-    expect(sessions.size).toBe(8);
-    expect(sessions.has("delivered-0")).toBe(false);
-    expect(sessions.has("new-session")).toBe(true);
+    expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+    expect(sessions.size).toBe(16);
+    expect([...sessions.keys()]).toEqual(
+      Array.from({ length: 16 }, (_value, index) => `recovery-${index}`),
+    );
   });
 
   it("protects terminal QR delivery through audit, then expires abandoned retention", async () => {

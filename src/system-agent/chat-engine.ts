@@ -151,6 +151,14 @@ export class SystemAgentChatEngine {
     );
   }
 
+  /** A delivered terminal poll remains replayable until its bounded recovery lease expires. */
+  hasRecoverableQrReply(): boolean {
+    this.pruneExpiredPollReplies();
+    return [...this.retainedPollReplies.values()].some(
+      ({ reply, terminalHistoryRecorded }) => isTerminalPollReply(reply) && terminalHistoryRecorded,
+    );
+  }
+
   getPersistentApplySettlement(): Promise<void> | null {
     return this.persistentApplySettlement;
   }
@@ -331,10 +339,19 @@ export class SystemAgentChatEngine {
 
   async cancelWizard(cancel: SystemAgentWizardCancel): Promise<SystemAgentChatReply> {
     this.assertActive();
+    // Only an in-flight passive observation may be interrupted out of queue: it can
+    // be waiting for the same runner that cancellation must release. Other turns
+    // retain their accepted ordering on the single execution queue.
+    const interruption = this.passivePollObservations.has(cancel.stepId)
+      ? this.wizard.requestCancellation(cancel)
+      : null;
     const turn = this.turnQueue.then(async () => {
       this.assertActive();
-      const result = await this.router.answerWizard(this.wizard.cancel(cancel));
+      const result = await this.router.answerWizard(
+        interruption ? interruption.finish() : this.wizard.cancel(cancel),
+      );
       this.assertActive();
+      this.retainedPollReplies.delete(cancel.stepId);
       return this.completeTurn({ text: result.text, action: "none" }, result.userHistoryText);
     });
     this.turnQueue = turn.catch(() => undefined);

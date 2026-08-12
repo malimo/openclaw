@@ -40,6 +40,7 @@ type FakeEngine = {
   cancelWizard: ReturnType<typeof vi.fn>;
   pollStep: ReturnType<typeof vi.fn>;
   hasPendingQrCode: ReturnType<typeof vi.fn>;
+  hasRecoverableQrReply: ReturnType<typeof vi.fn>;
   handle: ReturnType<typeof vi.fn>;
   seedHistory: ReturnType<typeof vi.fn>;
   historyLength: ReturnType<typeof vi.fn>;
@@ -63,6 +64,7 @@ function makeEngine(): FakeEngine {
       throw new SystemAgentWizardAnswerError("The hosted wizard step is no longer active.");
     }),
     hasPendingQrCode: vi.fn(() => false),
+    hasRecoverableQrReply: vi.fn(() => false),
     handle: vi.fn(async () => ({ text: "did the thing", action: "none" })),
     seedHistory: vi.fn(),
     historyLength: vi.fn(() => 0),

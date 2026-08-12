@@ -63,6 +63,53 @@ describe("SystemAgentChatEngine passive QR polling", () => {
     }
   });
 
+  it("lets cancellation interrupt an active passive QR observation", async () => {
+    const owner = createDeferred();
+    const observationStarted = createDeferred();
+    const releaseObservation = createDeferred();
+    let abortObserved = false;
+    const engine = createQrEngine(async (_channel, prompter, _beforePersistentApply, signal) => {
+      try {
+        await prompter.qrCode?.({
+          title: "Link a device",
+          message: "Scan this QR code and approve the device.",
+          text: QR_TEXT,
+          dismissed: owner.promise,
+        });
+      } finally {
+        abortObserved = signal.aborted;
+      }
+    });
+    const poll = vi.spyOn(ChatWizardHost.prototype, "pollStep").mockImplementation(async () => {
+      observationStarted.resolve();
+      await releaseObservation.promise;
+      return { text: "Observed", configWritten: false };
+    });
+
+    let cancellation: ReturnType<SystemAgentChatEngine["cancelWizard"]> | undefined;
+    try {
+      const prompt = await engine.handle("connect telegram");
+      const stepId = expectDefined(prompt.step, "QR step").id;
+      const observation = engine.pollStep(stepId);
+      await observationStarted.promise;
+      await expect(observation).resolves.toMatchObject({ wizardSettling: true });
+
+      cancellation = engine.cancelWizard({ stepId });
+      await vi.waitFor(() => expect(abortObserved).toBe(true));
+      releaseObservation.resolve();
+      await expect(cancellation).resolves.toMatchObject({
+        text: expect.stringContaining("setup cancelled"),
+      });
+      await expect(engine.pollStep(stepId)).rejects.toThrow("no longer active");
+    } finally {
+      poll.mockRestore();
+      releaseObservation.resolve();
+      owner.resolve();
+      await cancellation?.catch(() => undefined);
+      await engine.dispose();
+    }
+  });
+
   it("replays a dropped follow-up until the wizard advances", async () => {
     const owner = createDeferred();
     const releaseFollowUp = createDeferred();
