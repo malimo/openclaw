@@ -10,6 +10,7 @@ import {
   CANCEL_HINT,
   countCancelHints,
   expectDefined,
+  SystemAgentInferenceUnavailableError,
   SystemAgentWizardAnswerError,
   type OpenClawConfig,
   type WizardPrompter,
@@ -315,6 +316,81 @@ describe("SystemAgentChatEngine wizard", () => {
     expect(disposed).toBe(false);
 
     releaseRunner();
+    await disposal;
+    expect(disposed).toBe(true);
+  });
+
+  it("retains QR cleanup after inference loss clears the active bridge", async () => {
+    const baseConfig = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "test-key",
+            auth: "api-key",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const changedConfig = {
+      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
+    } satisfies OpenClawConfig;
+    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
+    let currentConfig: OpenClawConfig = baseConfig;
+    let cleanupStarted = false;
+    let releaseCleanup!: () => void;
+    const cleanup = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      supportsQrCode: true,
+      verifiedInference,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
+        loadOverview: fakeOverviewLoader(),
+      },
+      runChannelSetupWizard: async (_channel, prompter, _beforePersistentApply, signal) => {
+        const owner = new Promise<void>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new Error("QR owner aborted", { cause: signal.reason })),
+            { once: true },
+          );
+        });
+        try {
+          await prompter.qrCode?.({
+            title: "Link a device",
+            message: "Scan this QR code and approve the device.",
+            text: QR_TEXT,
+            dismissed: owner,
+          });
+        } finally {
+          cleanupStarted = true;
+          await cleanup;
+        }
+      },
+    });
+
+    await engine.handle("connect telegram");
+    currentConfig = changedConfig;
+    await expect(engine.handle("status")).rejects.toBeInstanceOf(
+      SystemAgentInferenceUnavailableError,
+    );
+    await vi.waitFor(() => expect(cleanupStarted).toBe(true));
+
+    let disposed = false;
+    const disposal = engine.dispose().then(() => {
+      disposed = true;
+    });
+    await Promise.resolve();
+    expect(disposed).toBe(false);
+
+    releaseCleanup();
     await disposal;
     expect(disposed).toBe(true);
   });

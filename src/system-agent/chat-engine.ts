@@ -331,7 +331,9 @@ export class SystemAgentChatEngine {
     this.router.clearForInferenceLoss();
     delete this.agentSession.cliSession;
     if (cancelWizard) {
-      void this.wizard.dispose();
+      // Inference loss terminates the conversation. Start the aggregate owner
+      // disposal now so later Gateway/TUI cleanup joins the producer settlement.
+      void this.dispose().catch(() => undefined);
     }
     this.history.splice(0);
     throw new SystemAgentInferenceUnavailableError("conversation", failures);

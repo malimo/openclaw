@@ -560,9 +560,14 @@ const setupWizard: ChannelSetupWizard = {
     Setup code that already owns a QR-backed operation can pass its raw QR text and completion promise through `WizardPrompter.qrCode`. OpenClaw renders and transports a bounded image; the plugin remains the authority for success, failure, and cancellation.
 
     ```typescript
-    const link = startDeviceLink();
+    if (!prompter.qrCode) {
+      throw new Error(
+        "This setup host cannot present QR credentials. Use the plugin's native setup flow.",
+      );
+    }
 
-    if (prompter.qrCode) {
+    const link = startDeviceLink();
+    try {
       await prompter.qrCode({
         title: "Link a device",
         message: "Scan the code and approve the device.",
@@ -570,21 +575,13 @@ const setupWizard: ChannelSetupWizard = {
         expiresAtMs: link.expiresAtMs,
         dismissed: link.finished,
       });
-    } else {
-      try {
-        await prompter.note(
-          `Open this device-link URI with your non-QR setup flow:\n${link.uri}`,
-          "Link a device",
-        );
-        await link.finished;
-      } catch (error) {
-        link.cancel();
-        throw error;
-      }
+    } catch (error) {
+      link.cancel();
+      throw error;
     }
     ```
 
-    `dismissed` is required and must settle with the producer operation. `qrCode(...)` returns `Promise<void>` only after that promise settles; there is no separate user Continue acknowledgement. Provide a non-QR fallback when `prompter.qrCode` is unavailable.
+    `dismissed` is required and must settle with the producer operation. `qrCode(...)` returns `Promise<void>` only after that promise settles; there is no separate user Continue acknowledgement. Check capability before starting a credential-bearing operation. When `prompter.qrCode` is unavailable, route the operator to a plugin-native setup flow instead of putting the raw link URI in prompt text.
 
   </Accordion>
   <Accordion title="Shared allowFrom prompts">
