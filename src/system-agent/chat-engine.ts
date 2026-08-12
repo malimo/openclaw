@@ -81,7 +81,7 @@ export class SystemAgentChatEngine {
   private disposal: Promise<void> | null = null;
   private persistentApplySettlement: Promise<void> | null = null;
   private retainedPollReplies = new Map<string, RetainedPollReply>();
-  private passivePollsInFlight = 0;
+  private passivePollsInFlight = new Map<string, number>();
 
   constructor(
     private readonly options: SystemAgentChatEngineOptions,
@@ -132,7 +132,7 @@ export class SystemAgentChatEngine {
     this.pruneExpiredPollReplies();
     return (
       this.wizard.hasPendingQrCode() ||
-      this.passivePollsInFlight > 0 ||
+      this.passivePollsInFlight.size > 0 ||
       this.retainedPollReplies.size > 0
     );
   }
@@ -228,7 +228,10 @@ export class SystemAgentChatEngine {
       }
       return { ...retained.reply };
     }
-    this.passivePollsInFlight += 1;
+    if (!this.passivePollsInFlight.has(stepId)) {
+      this.wizard.assertPollableStep(stepId);
+    }
+    this.passivePollsInFlight.set(stepId, (this.passivePollsInFlight.get(stepId) ?? 0) + 1);
     const observation = this.turnQueue
       .then(async () => {
         this.assertActive();
@@ -255,7 +258,12 @@ export class SystemAgentChatEngine {
         return reply;
       })
       .finally(() => {
-        this.passivePollsInFlight -= 1;
+        const remaining = (this.passivePollsInFlight.get(stepId) ?? 1) - 1;
+        if (remaining === 0) {
+          this.passivePollsInFlight.delete(stepId);
+        } else {
+          this.passivePollsInFlight.set(stepId, remaining);
+        }
       });
     this.turnQueue = observation.catch(() => undefined);
     let cancelTimer: (() => void) | undefined;

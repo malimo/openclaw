@@ -239,17 +239,13 @@ export class ChatWizardHost {
 
   /** Observe a QR-owned step without answering the dependency-owned prompt. */
   async pollStep(stepId: string): Promise<ChatWizardResult> {
-    this.expireActiveQrIfNeeded();
-    this.pruneExpiredPassiveQrRetention();
+    this.assertPollableStep(stepId);
     const bridge = this.bridge;
     if (!bridge) {
       throw new SystemAgentWizardAnswerError("The hosted wizard step is no longer active.");
     }
     if (bridge.step?.id === stepId) {
       return { text: renderWizardStep(bridge.step), configWritten: false };
-    }
-    if (bridge.passiveQrStepId !== stepId) {
-      throw new SystemAgentWizardAnswerError("The hosted wizard poll targets a stale step.");
     }
     const result = this.renderPendingQrOwner(bridge) ?? (await this.pump());
     return bridge.passiveQrRetentionExpiresAtMs === undefined
@@ -258,6 +254,21 @@ export class ChatWizardHost {
           ...result,
           passiveQrRetentionExpiresAtMs: bridge.passiveQrRetentionExpiresAtMs,
         };
+  }
+
+  assertPollableStep(stepId: string): void {
+    this.expireActiveQrIfNeeded();
+    this.pruneExpiredPassiveQrRetention();
+    const bridge = this.bridge;
+    if (!bridge) {
+      throw new SystemAgentWizardAnswerError("The hosted wizard step is no longer active.");
+    }
+    if (bridge.step?.id === stepId) {
+      return;
+    }
+    if (bridge.passiveQrStepId !== stepId) {
+      throw new SystemAgentWizardAnswerError("The hosted wizard poll targets a stale step.");
+    }
   }
 
   async resolveReply(text: string): Promise<ChatWizardResult | null> {

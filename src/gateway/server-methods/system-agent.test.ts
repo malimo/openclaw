@@ -14,7 +14,10 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
-import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
+import {
+  SystemAgentChatEngine,
+  SystemAgentWizardAnswerError,
+} from "../../system-agent/chat-engine.js";
 import { SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS } from "../../system-agent/chat-wizard-host.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
@@ -1129,6 +1132,9 @@ describe("openclaw.chat", () => {
 
     await expect(qrEngine.pollStep(stepId)).resolves.toMatchObject({ wizardSettling: true });
     await auditStarted.promise;
+    await expect(qrEngine.pollStep("stale-step")).rejects.toBeInstanceOf(
+      SystemAgentWizardAnswerError,
+    );
     const admission = callChat(makeContext(sessions), { sessionId: "new-session" });
     await waitOneTask();
 
