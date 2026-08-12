@@ -393,12 +393,15 @@ describe("WizardSession", () => {
       throw new Error("expected QR step");
     }
     expect(session.hasExternalQrPresentationOwner()).toBe(true);
+    expect(session.hasExternalQrPresentationOwner(prompt.step.id)).toBe(true);
+    expect(session.hasExternalQrPresentationOwner("other-step")).toBe(false);
     expect(session.hasOwnedQrPresentation()).toBe(true);
 
     settleOwner();
     const next = await session.next();
     expect(next.step).toMatchObject({ type: "text", message: "Device label" });
     expect(session.hasExternalQrPresentationOwner()).toBe(false);
+    expect(session.hasExternalQrPresentationOwner(prompt.step.id)).toBe(false);
     expect(session.hasOwnedQrPresentation()).toBe(false);
     if (!next.step) {
       throw new Error("expected text step");

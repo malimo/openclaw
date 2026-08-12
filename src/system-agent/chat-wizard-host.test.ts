@@ -137,6 +137,113 @@ describe("SystemAgentChatEngine wizard", () => {
     expect(engine.hasPendingQrCode()).toBe(false);
   });
 
+  it("projects a successor QR through the last client-known poll step", async () => {
+    const firstOwner = createDeferred<void>();
+    const secondOwner = createDeferred<void>();
+    const secondQrStarted = createDeferred<void>();
+    const releaseSecondQr = createDeferred<void>();
+    const engine = createQrEngine(async (_channel, prompter) => {
+      await prompter.qrCode?.({
+        title: "Link the first device",
+        message: "Scan the first QR code.",
+        text: `${QR_TEXT}/first`,
+        dismissed: firstOwner.promise,
+        expiresAtMs: Date.now() + 60_000,
+      });
+      secondQrStarted.resolve();
+      await releaseSecondQr.promise;
+      const secondQr = prompter.qrCode?.({
+        title: "Link the replacement device",
+        message: "Scan the replacement QR code.",
+        text: `${QR_TEXT}/second`,
+        dismissed: secondOwner.promise,
+        expiresAtMs: Date.now() + 60_000,
+      });
+      await secondQr;
+    });
+
+    const first = await engine.handle("connect telegram");
+    const firstStepId = expectDefined(first.step, "first QR step").id;
+    firstOwner.resolve();
+    await secondQrStarted.promise;
+    const settling = await engine.pollStep(firstStepId);
+    expect(settling).toMatchObject({ wizardSettling: true });
+    expect(settling).not.toHaveProperty("step");
+    releaseSecondQr.resolve();
+
+    let successor: Awaited<ReturnType<SystemAgentChatEngine["pollStep"]>> | undefined;
+    await vi.waitFor(async () => {
+      const reply = await engine.pollStep(firstStepId);
+      expect(reply.step?.type).toBe("qr");
+      expect(reply.step?.id).not.toBe(firstStepId);
+      successor = reply;
+    });
+    const second = expectDefined(successor, "successor QR reply");
+    const secondStep = expectDefined(second.step, "successor QR step");
+    const firstExpiresInMs = expectDefined(secondStep.expiresInMs, "successor QR expiry");
+
+    const retried = await engine.pollStep(firstStepId);
+    expect(retried.step).toMatchObject({
+      id: secondStep.id,
+      type: "qr",
+      qrDataUrl: secondStep.qrDataUrl,
+    });
+    expect(expectDefined(retried.step?.expiresInMs, "retried QR expiry")).toBeLessThanOrEqual(
+      firstExpiresInMs,
+    );
+
+    await expect(engine.pollStep(secondStep.id)).resolves.toMatchObject({
+      step: { id: secondStep.id, type: "qr" },
+    });
+    await expect(engine.pollStep(firstStepId)).rejects.toThrow("stale step");
+    await expect(engine.cancelWizard({ stepId: firstStepId })).rejects.toThrow("stale step");
+
+    secondOwner.resolve();
+    await vi.waitFor(async () => {
+      const reply = await engine.pollStep(secondStep.id);
+      expect(reply.wizardSettling).not.toBe(true);
+      expect(reply.step).toBeUndefined();
+    });
+  });
+
+  it("cancels a successor QR through an unacknowledged predecessor cursor", async () => {
+    const firstOwner = createDeferred<void>();
+    const secondOwner = createDeferred<void>();
+    const secondQrStarted = createDeferred<void>();
+    const engine = createQrEngine(async (_channel, prompter) => {
+      await prompter.qrCode?.({
+        title: "Link the first device",
+        message: "Scan the first QR code.",
+        text: `${QR_TEXT}/first`,
+        dismissed: firstOwner.promise,
+      });
+      const secondQr = prompter.qrCode?.({
+        title: "Link the replacement device",
+        message: "Scan the replacement QR code.",
+        text: `${QR_TEXT}/second`,
+        dismissed: secondOwner.promise,
+      });
+      secondQrStarted.resolve();
+      await secondQr;
+    });
+
+    const first = await engine.handle("connect telegram");
+    const firstStepId = expectDefined(first.step, "first QR step").id;
+    firstOwner.resolve();
+    await secondQrStarted.promise;
+    await vi.waitFor(async () => {
+      const successor = await engine.pollStep(firstStepId);
+      expect(successor.step?.type).toBe("qr");
+      expect(successor.step?.id).not.toBe(firstStepId);
+    });
+
+    const cancelled = await engine.cancelWizard({ stepId: firstStepId });
+    expect(cancelled.text).toContain("setup cancelled");
+    expect(cancelled.step).toBeUndefined();
+    expect(JSON.stringify(cancelled)).not.toContain("data:image/png");
+    expect(engine.hasPendingQrCode()).toBe(false);
+  });
+
   it("verifies a passive QR write once before retaining its terminal reply", async () => {
     let settleOwner!: () => void;
     const owner = new Promise<void>((resolve) => {

@@ -566,14 +566,18 @@ export class WizardSession {
     return this.ownedQrStepIds.size > 0 && this.status === "running" && !this.settled;
   }
 
-  /** True while a producer promise owns QR completion. */
-  hasExternalQrPresentationOwner(): boolean {
-    return this.externalQrOwnerStepIds.size > 0 && this.status === "running" && !this.settled;
+  /** True while any producer, or the named producer, owns QR completion. */
+  hasExternalQrPresentationOwner(stepId?: string): boolean {
+    const hasOwner =
+      stepId === undefined
+        ? this.externalQrOwnerStepIds.size > 0
+        : this.externalQrOwnerStepIds.has(stepId);
+    return hasOwner && this.status === "running" && !this.settled;
   }
 
   /** Retire an expired credential while its external owner finishes or rejects the operation. */
   expireOwnedQrPresentation(stepId: string): boolean {
-    if (!this.externalQrOwnerStepIds.has(stepId) || !this.hasExternalQrPresentationOwner()) {
+    if (!this.hasExternalQrPresentationOwner(stepId)) {
       return false;
     }
     const pending = this.answerDeferred.get(stepId);
