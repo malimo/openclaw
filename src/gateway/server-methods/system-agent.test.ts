@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -925,6 +926,93 @@ describe("openclaw.chat", () => {
         ([turn]) => turn.role === "assistant" && turn.text === terminalText,
       ),
     ).toHaveLength(1);
+  });
+
+  it("keeps a dropped QR follow-up replayable through ninth-session admission", async () => {
+    const ownerSettled = createDeferred();
+    const releaseFollowUp = createDeferred();
+    const followUpPresented = createDeferred();
+    const engine = new SystemAgentChatEngine(
+      {
+        verifiedInference: requireVerifiedInferenceFixture(),
+        deps: requireVerifiedInferenceDeps(),
+        supportsQrCode: true,
+      },
+      {
+        wizardDependencies: {
+          runChannelSetupWizard: async (_channel, prompter) => {
+            await prompter.qrCode?.({
+              title: "Link a device",
+              message: "Scan this QR code.",
+              text: "https://example.test/pair",
+              dismissed: ownerSettled.promise,
+            });
+            await releaseFollowUp.promise;
+            const label = prompter.text({ message: "Device label" });
+            followUpPresented.resolve();
+            await label;
+          },
+        },
+      },
+    );
+    const prompt = await engine.handle("connect telegram");
+    const qrStepId = expectDefined(prompt.step?.id, "QR step id");
+    const target = seededSession({ engine, lastUsedAt: 0 });
+    const sessions = new Map<string, SystemAgentChatSession>([["lost-follow-up", target]]);
+    const context = makeContext(sessions);
+    ownerSettled.resolve();
+    await expect(
+      callChat(context, { sessionId: "lost-follow-up", pollStepId: qrStepId }),
+    ).resolves.toMatchObject({ payload: { wizardSettling: true } });
+    releaseFollowUp.resolve();
+    await followUpPresented.promise;
+
+    const droppedReply = await callChat(context, {
+      sessionId: "lost-follow-up",
+      pollStepId: qrStepId,
+    });
+    expect(droppedReply.payload).toMatchObject({ step: { type: "text" } });
+    if (!isRecord(droppedReply.payload) || !isRecord(droppedReply.payload.step)) {
+      throw new Error("retained follow-up response must contain a step");
+    }
+    const followUpStepId = droppedReply.payload.step.id;
+    if (typeof followUpStepId !== "string") {
+      throw new Error("retained follow-up step must contain an id");
+    }
+    expect(engine.hasPendingQrCode()).toBe(false);
+    expect(engine.hasRecoverableQrReply()).toBe(true);
+
+    target.lastUsedAt = 0;
+    for (let index = 1; index < 8; index += 1) {
+      sessions.set(`ordinary-${index}`, seededSession({ lastUsedAt: index }));
+    }
+    stubEngineOverview();
+
+    const admission = await callChat(context, { sessionId: "new-session" });
+    expect(admission).toMatchObject({ ok: true });
+    expect(sessions.has("lost-follow-up")).toBe(true);
+    expect(sessions.has("new-session")).toBe(true);
+    expect(sessions.size).toBe(9);
+    await expect(
+      callChat(context, { sessionId: "lost-follow-up", pollStepId: qrStepId }),
+    ).resolves.toEqual(droppedReply);
+
+    await expect(
+      callChat(context, {
+        sessionId: "lost-follow-up",
+        wizardAnswer: { stepId: followUpStepId, value: "OpenClaw" },
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(engine.hasRecoverableQrReply()).toBe(false);
+    await expect(
+      callChat(context, { sessionId: "lost-follow-up", pollStepId: qrStepId }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        details: { code: "system_agent_session_invalidated" },
+      },
+    });
   });
 
   it("seeds a new engine with the persisted tail before recording its welcome", async () => {

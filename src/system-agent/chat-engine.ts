@@ -151,11 +151,12 @@ export class SystemAgentChatEngine {
     );
   }
 
-  /** A delivered terminal poll remains replayable until its bounded recovery lease expires. */
+  /** Every reply retained under the original QR poll id is a live recovery lease. */
   hasRecoverableQrReply(): boolean {
     this.pruneExpiredPollReplies();
     return [...this.retainedPollReplies.values()].some(
-      ({ reply, terminalHistoryRecorded }) => isTerminalPollReply(reply) && terminalHistoryRecorded,
+      ({ reply, terminalHistoryRecorded }) =>
+        !isTerminalPollReply(reply) || terminalHistoryRecorded,
     );
   }
 

@@ -151,16 +151,19 @@ describe("SystemAgentChatEngine passive QR polling", () => {
       const followUpStep = expectDefined(droppedReply.step, "follow-up step");
       await expect(engine.pollStep(qrStepId)).resolves.toEqual(droppedReply);
       expect(engine.hasPendingQrCode()).toBe(false);
+      expect(engine.hasRecoverableQrReply()).toBe(true);
 
       const invalid = await engine.answerWizard({ stepId: followUpStep.id, value: "Other" });
       expect(invalid.step?.id).toBe(followUpStep.id);
       await expect(engine.pollStep(qrStepId)).resolves.toMatchObject({
         step: { id: followUpStep.id, type: "text" },
       });
+      expect(engine.hasRecoverableQrReply()).toBe(true);
 
       const advance = engine.answerWizard({ stepId: followUpStep.id, value: "OpenClaw" });
       const stalePoll = engine.pollStep(qrStepId);
       await advance;
+      expect(engine.hasRecoverableQrReply()).toBe(false);
       await secondStepPresented.promise;
       await expect(stalePoll).rejects.toThrow("stale step");
     } finally {

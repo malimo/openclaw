@@ -194,7 +194,7 @@ async function evictOldestSession(
   let oldestAt = Number.POSITIVE_INFINITY;
   for (const [key, session] of sessions) {
     // Recovery leases are a separate bounded pool: admission may use the freed
-    // active slot, but cannot destroy a terminal reply whose delivery was lost.
+    // active slot, but cannot destroy a retained poll reply whose delivery was lost.
     if (protectedKeys.has(key) || recoveryKeys.has(key)) {
       continue;
     }
