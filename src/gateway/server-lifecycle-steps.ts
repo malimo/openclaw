@@ -1,4 +1,4 @@
-type GatewayLifecycleStep = () => PromiseLike<unknown> | unknown;
+type GatewayLifecycleStep = () => unknown;
 
 /** Run ordered lifecycle cleanup without letting one failure skip later owners. */
 export async function runGatewayLifecycleSteps(
