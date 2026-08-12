@@ -342,6 +342,31 @@ describe("SystemAgentChatEngine wizard", () => {
     expect(engine.hasPendingQrCode()).toBe(true);
     await engine.handle("cancel");
   });
+
+  it("replaces scan instructions when the QR expires before its first projection", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    const engine = createQrEngine(async (_channel, prompter) => {
+      await prompter.qrCode?.({
+        title: "Link a device",
+        message: "Scan this QR code and approve the device.",
+        text: QR_TEXT,
+        dismissed: new Promise<void>(() => {}),
+        expiresAtMs: 1_800_000_000_000,
+      });
+    });
+
+    const prompt = await engine.handle("connect telegram");
+
+    expect(prompt.text).toBe(
+      "This setup QR code expired. Setup is still finishing the attempt automatically.",
+    );
+    expect(prompt.text).not.toContain("Scan");
+    expect(prompt.step).toBeUndefined();
+    expect(prompt.wizardSettling).toBe(true);
+    await engine.handle("cancel");
+  });
+
   it("recommends the confirm option matching the initial value", async () => {
     let enabled: boolean | undefined;
     const engine = new SystemAgentChatEngine({

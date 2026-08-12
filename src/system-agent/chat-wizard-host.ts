@@ -100,6 +100,8 @@ type ActiveWizardBridge = {
 const log = createSubsystemLogger("system-agent/chat-wizard-host");
 const SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS = 25 * 60 * 1000;
 const WIZARD_CANCEL_HINT = "Say `cancel` to stop this setup.";
+const WIZARD_QR_EXPIRED_MESSAGE =
+  "This setup QR code expired. Setup is still finishing the attempt automatically.";
 let hostedRuntimePromise: Promise<HostedRuntime> | undefined;
 
 function loadHostedRuntime(): Promise<HostedRuntime> {
@@ -147,10 +149,14 @@ export class ChatWizardHost {
   decorateReply(reply: SystemAgentChatReply): SystemAgentChatReply {
     this.expireActiveQrIfNeeded();
     const step = this.bridge?.step ?? null;
-    const completedReply =
-      reply.text && step && step.type !== "qr" && wizardStepAwaitsInput(step)
-        ? { ...reply, text: `${reply.text}\n${WIZARD_CANCEL_HINT}` }
+    const projectedReply =
+      this.bridge?.qrExpired === true && this.bridge.session.hasExternalQrPresentationOwner()
+        ? { ...reply, text: WIZARD_QR_EXPIRED_MESSAGE }
         : reply;
+    const completedReply =
+      projectedReply.text && step && step.type !== "qr" && wizardStepAwaitsInput(step)
+        ? { ...projectedReply, text: `${projectedReply.text}\n${WIZARD_CANCEL_HINT}` }
+        : projectedReply;
     const question = wizardStepChatQuestion(step);
     const clientStep = step
       ? sanitizeWizardStepForClient(
@@ -241,7 +247,7 @@ export class ChatWizardHost {
     if (bridge.qrExpired) {
       if (bridge.session.hasExternalQrPresentationOwner()) {
         return {
-          text: "This setup QR code expired. Setup is still finishing the attempt automatically.",
+          text: WIZARD_QR_EXPIRED_MESSAGE,
           configWritten: false,
         };
       }
