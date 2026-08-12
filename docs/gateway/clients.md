@@ -160,6 +160,37 @@ calling `openclaw.chat` with the same `sessionId` and `pollStepId: step.id`.
 A response with `wizardSettling: true` means the owner is still finishing;
 continue polling with bounded backoff until the next step or terminal reply.
 
+Show a cancel action only when `hello-ok.features.capabilities` contains
+`GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL`. Send the currently rendered
+step ID through `wizardCancel`; do not combine this request with a message,
+answer, poll, reset, or delegation:
+
+```ts
+import { type SystemAgentChatParams, type SystemAgentChatResult } from "@openclaw/gateway-protocol";
+
+const cancelParams = {
+  sessionId,
+  wizardCancel: { stepId: step.id },
+} satisfies SystemAgentChatParams;
+
+await client.request<SystemAgentChatResult>("openclaw.chat", cancelParams);
+```
+
+Treat `qrDataUrl` as credential-bearing, memory-only data. Never write it to a
+transcript, persistent store, cache, log, or telemetry. Remove the image from
+the rendered view, revoke derived object URLs, clear every reference to the data
+URL, and zero mutable decoded byte buffers when any of these boundaries occurs:
+
+- the owner completes and polling returns the next step or a terminal reply;
+- the client starts cancellation or resets the session;
+- `expiresInMs` elapses; or
+- the Gateway returns typed session-invalidated details, including after a
+  reconnect or capability change.
+
+Immutable strings cannot be overwritten in place. Avoid making extra data-URL
+copies, release every string reference at the boundary, and explicitly fill
+mutable buffers with zeroes instead of relying on garbage collection alone.
+
 QR capability is bound to the in-memory session. If reconnect negotiation
 changes it, the Gateway returns typed session-invalidated details. Discard the
 old QR and call `openclaw.chat` with `reset: true` before continuing.
