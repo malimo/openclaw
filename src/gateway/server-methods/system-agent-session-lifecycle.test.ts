@@ -104,7 +104,9 @@ describe("system-agent session lifecycle", () => {
       retirement = retireAndDisposeSystemAgentSessions({
         sessions,
         wizardSessions,
-        approvalManager: { expire } as GatewayRequestContext["systemAgentApprovalManager"],
+        approvalManager: {
+          expire,
+        } as unknown as GatewayRequestContext["systemAgentApprovalManager"],
       });
     } catch (error) {
       synchronousError = error;

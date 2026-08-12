@@ -1,3 +1,4 @@
+import { toErrorObject } from "../../infra/errors.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createAdmittedWizardSession,
@@ -88,14 +89,17 @@ function settleCleanupTasks(
   describeFailure: (errorCount: number) => string,
 ): Promise<void> {
   return Promise.allSettled(tasks).then((results) => {
-    const errors = results.flatMap((result) => {
-      if (result.status !== "rejected") {
-        return [];
-      }
-      return result.reason instanceof AggregateError ? result.reason.errors : [result.reason];
-    });
+    const errors = results
+      .flatMap((result) => {
+        if (result.status !== "rejected") {
+          return [];
+        }
+        return result.reason instanceof AggregateError ? result.reason.errors : [result.reason];
+      })
+      .map((error) => toErrorObject(error, "Unknown system-agent cleanup failure"));
     if (errors.length > 0) {
-      throw new AggregateError(errors, describeFailure(errors.length));
+      const details = errors.map((error) => error.message).join("; ");
+      throw new AggregateError(errors, `${describeFailure(errors.length)}: ${details}`);
     }
   });
 }
@@ -162,7 +166,7 @@ export function disposeSystemAgentSession(params: {
     params.approvalManager.expire(params.session.pendingApproval.id, params.reason);
   } catch (error) {
     // Durable-store faults stay asynchronous so one approval cannot skip sibling cleanup.
-    approvalExpiration = Promise.reject(error);
+    approvalExpiration = Promise.reject(toErrorObject(error, "Unknown approval cleanup failure"));
   }
   const cleanup = settleCleanupTasks(
     [disposal, approvalExpiration],
