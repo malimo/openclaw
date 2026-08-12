@@ -273,7 +273,10 @@ describe("gateway startup import boundaries", () => {
       "cronReconciliation.invalidate();",
     );
     expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
-      "void stopOutboundDeliveryRecoveryForClose();",
+      "startGatewayLifecycleSteps([",
+    );
+    expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
+      "stopOutboundDeliveryRecoveryForClose,",
     );
     expect(beginHelperStart).toBeGreaterThan(-1);
     expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
@@ -283,7 +286,7 @@ describe("gateway startup import boundaries", () => {
       "stopConfigReloaderForClose().catch",
     );
     expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
-      "stopOutboundDeliveryRecoveryForClose(),",
+      "...closeOwnerSettlements",
     );
     expect(postReadyStart).toBeGreaterThan(-1);
     expect(postReadyBlock).toContain("isClosing: () => lifecycle.closePreludeStarted");

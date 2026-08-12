@@ -1,4 +1,33 @@
 type GatewayLifecycleStep = () => unknown;
+type GatewayLifecycleOutcome =
+  | { ok: true }
+  | {
+      ok: false;
+      error: unknown;
+    };
+
+/** Start cleanup owners together and immediately own every async rejection. */
+export function startGatewayLifecycleSteps(
+  steps: Iterable<GatewayLifecycleStep>,
+): GatewayLifecycleStep[] {
+  return Array.from(steps, (step) => {
+    let settlement: Promise<GatewayLifecycleOutcome>;
+    try {
+      settlement = Promise.resolve(step()).then(
+        () => ({ ok: true }),
+        (error: unknown) => ({ ok: false, error }),
+      );
+    } catch (error) {
+      settlement = Promise.resolve({ ok: false, error });
+    }
+    return async () => {
+      const outcome = await settlement;
+      if (!outcome.ok) {
+        throw outcome.error;
+      }
+    };
+  });
+}
 
 /** Run ordered lifecycle cleanup without letting one failure skip later owners. */
 export async function runGatewayLifecycleSteps(

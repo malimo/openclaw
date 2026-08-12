@@ -54,7 +54,7 @@ function createKernel() {
     }),
     createCloseHandler: () => close,
     createHttpTransportOptions: () => ({}),
-    runClosePrelude: vi.fn(async () => {
+    finishClosePrelude: vi.fn(async () => {
       mocks.calls.push("close-prelude");
     }),
     stopRegisteredGatewayLifetimeSidecars: vi.fn(async () => {
@@ -83,21 +83,33 @@ describe("Gateway outer lifecycle", () => {
     });
   });
 
-  it("reports session retirement failure after essential close steps finish", async () => {
+  it("preserves begin and finish failures once after essential close steps", async () => {
     const retirementError = new AggregateError(
       [new Error("engine disposal failed")],
       "session retirement failed",
     );
     const kernel = createKernel();
+    const finishError = new Error("close prelude failed");
     kernel.beginClosePrelude.mockImplementationOnce(async () => {
       mocks.calls.push("session-retirement");
       throw retirementError;
     });
+    kernel.finishClosePrelude.mockImplementationOnce(async () => {
+      mocks.calls.push("close-prelude");
+      throw finishError;
+    });
     mocks.createGatewayKernel.mockResolvedValue(kernel);
     const server = await startGatewayServerCore(18_789);
 
-    await expect(server.close({ reason: "test shutdown" })).rejects.toBe(retirementError);
+    const failure = await server.close({ reason: "test shutdown" }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
 
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([retirementError, finishError]);
+    expect(kernel.beginClosePrelude).toHaveBeenCalledOnce();
+    expect(kernel.finishClosePrelude).toHaveBeenCalledOnce();
     expect(mocks.calls).toEqual([
       "session-retirement",
       "terminal-shells",
