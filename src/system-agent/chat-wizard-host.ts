@@ -251,6 +251,9 @@ export class ChatWizardHost {
           configWritten: false,
         };
       }
+      // The timeout may abort the QR presentation before the setup runner finishes
+      // unwinding. Keep ordinary turns behind that owner so cleanup cannot race them.
+      await bridge.session.whenSettled();
       this.clearBridge();
       return null;
     }

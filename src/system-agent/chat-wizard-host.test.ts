@@ -367,6 +367,54 @@ describe("SystemAgentChatEngine wizard", () => {
     await engine.handle("cancel");
   });
 
+  it("waits for automatic-expiry cleanup before routing an ordinary turn", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    let cleanupStarted = false;
+    let releaseCleanup!: () => void;
+    const cleanup = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const runAgentTurn = vi.fn(async () => ({ text: "Ordinary turn completed." }));
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: runAgentTurn as never,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      supportsQrCode: true,
+      runChannelSetupWizard: async (_channel, prompter, _beforePersistentApply, signal) => {
+        const owner = new Promise<void>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new Error("QR owner aborted", { cause: signal.reason })),
+            { once: true },
+          );
+        });
+        try {
+          await prompter.qrCode?.({
+            title: "Link a device",
+            message: "Scan this QR code and approve the device.",
+            text: QR_TEXT,
+            dismissed: owner,
+            expiresAtMs: 1_800_000_001_000,
+          });
+        } finally {
+          cleanupStarted = true;
+          await cleanup;
+        }
+      },
+    });
+
+    await engine.handle("connect telegram");
+    await vi.advanceTimersByTimeAsync(1_000 + 25 * 60 * 1_000);
+    const ordinaryTurn = engine.handle("How is everything looking?");
+    await vi.waitFor(() => expect(cleanupStarted).toBe(true));
+    expect(runAgentTurn).not.toHaveBeenCalled();
+
+    releaseCleanup();
+    await expect(ordinaryTurn).resolves.toMatchObject({ text: "Ordinary turn completed." });
+    expect(runAgentTurn).toHaveBeenCalledTimes(1);
+  });
+
   it("recommends the confirm option matching the initial value", async () => {
     let enabled: boolean | undefined;
     const engine = new SystemAgentChatEngine({

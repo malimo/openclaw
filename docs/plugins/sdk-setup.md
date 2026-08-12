@@ -570,6 +570,17 @@ const setupWizard: ChannelSetupWizard = {
         expiresAtMs: link.expiresAtMs,
         dismissed: link.finished,
       });
+    } else {
+      try {
+        await prompter.note(
+          `Open this device-link URI with your non-QR setup flow:\n${link.uri}`,
+          "Link a device",
+        );
+        await link.finished;
+      } catch (error) {
+        link.cancel();
+        throw error;
+      }
     }
     ```
 
