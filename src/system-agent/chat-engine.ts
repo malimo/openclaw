@@ -4,6 +4,7 @@ import type {
   WizardAnswer,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import {
   cleanupSystemAgentSession,
   createSystemAgentSession,
@@ -86,8 +87,10 @@ export class SystemAgentChatEngine {
   private disposed = false;
   private disposal: Promise<void> | null = null;
   private persistentApplySettlement: Promise<void> | null = null;
+  // Passive QR retries share one queued observation; retained replies remain
+  // transport aliases until the wizard advances or their recovery lease expires.
   private retainedPollReplies = new Map<string, RetainedPollReply>();
-  private passivePollsInFlight = new Map<string, number>();
+  private passivePollObservations = new Map<string, Promise<SystemAgentChatReply>>();
 
   constructor(
     private readonly options: SystemAgentChatEngineOptions,
@@ -138,8 +141,8 @@ export class SystemAgentChatEngine {
     this.pruneExpiredPollReplies();
     return (
       this.wizard.hasPendingQrCode() ||
-      this.passivePollsInFlight.size > 0 ||
-      this.retainedPollReplies.size > 0
+      this.passivePollObservations.size > 0 ||
+      [...this.retainedPollReplies.values()].some(({ reply }) => isTerminalPollReply(reply))
     );
   }
 
@@ -195,12 +198,18 @@ export class SystemAgentChatEngine {
     if (!this.disposed) {
       this.disposed = true;
       this.router.clearForInferenceLoss();
+      this.retainedPollReplies.clear();
       void this.wizard.dispose();
     }
     this.disposal ??= (async () => {
-      await this.turnQueue;
-      await wizardSettlement;
-      await cleanupSystemAgentSession(this.agentSession);
+      try {
+        await this.turnQueue;
+        await wizardSettlement;
+        await cleanupSystemAgentSession(this.agentSession);
+      } finally {
+        this.passivePollObservations.clear();
+        this.retainedPollReplies.clear();
+      }
     })();
     await this.disposal;
   }
@@ -226,48 +235,41 @@ export class SystemAgentChatEngine {
   async pollStep(stepId: string): Promise<SystemAgentChatReply> {
     this.assertActive();
     this.pruneExpiredPollReplies();
-    const retained = this.retainedPollReplies.get(stepId);
-    if (retained) {
-      this.retainedPollReplies.delete(stepId);
-      if (retained.reply.text && isTerminalPollReply(retained.reply)) {
-        this.history.push({ role: "assistant", text: retained.reply.text });
-      }
-      return { ...retained.reply };
-    }
-    if (!this.passivePollsInFlight.has(stepId)) {
+    if (!this.retainedPollReplies.has(stepId) && !this.passivePollObservations.has(stepId)) {
       this.wizard.assertPollableStep(stepId);
     }
-    this.passivePollsInFlight.set(stepId, (this.passivePollsInFlight.get(stepId) ?? 0) + 1);
-    const observation = this.turnQueue
-      .then(async () => {
-        this.assertActive();
-        this.pruneExpiredPollReplies();
-        const queuedRetained = this.retainedPollReplies.get(stepId);
-        if (queuedRetained) {
-          return { ...queuedRetained.reply };
-        }
-        const result = await this.router.finalizeWizardResult(await this.wizard.pollStep(stepId));
-        this.assertActive();
-        const reply = this.wizard.decorateReply({ text: result.text, action: "none" });
-        if (reply.wizardSettling !== true) {
-          this.retainedPollReplies.set(stepId, {
-            expiresAtMs:
-              result.passiveQrRetentionExpiresAtMs ??
-              Date.now() + SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS,
-            reply: { ...reply },
-          });
-        }
-        return reply;
-      })
-      .finally(() => {
-        const remaining = (this.passivePollsInFlight.get(stepId) ?? 1) - 1;
-        if (remaining === 0) {
-          this.passivePollsInFlight.delete(stepId);
-        } else {
-          this.passivePollsInFlight.set(stepId, remaining);
-        }
-      });
-    this.turnQueue = observation.catch(() => undefined);
+    const observation = getOrCreatePromise(
+      this.passivePollObservations,
+      stepId,
+      () => {
+        const turn = this.turnQueue.then(async () => {
+          this.assertActive();
+          this.pruneExpiredPollReplies();
+          const queuedRetained = this.retainedPollReplies.get(stepId);
+          if (queuedRetained) {
+            return { ...queuedRetained.reply };
+          }
+          const result = await this.router.finalizeWizardResult(await this.wizard.pollStep(stepId));
+          this.assertActive();
+          const reply = this.wizard.decorateReply({ text: result.text, action: "none" });
+          if (reply.wizardSettling !== true) {
+            this.retainedPollReplies.set(stepId, {
+              expiresAtMs:
+                result.passiveQrRetentionExpiresAtMs ??
+                Date.now() + SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS,
+              reply: { ...reply },
+            });
+            if (reply.text && isTerminalPollReply(reply) && !this.wizard.hasPendingQrCode()) {
+              this.history.push({ role: "assistant", text: reply.text });
+            }
+          }
+          return reply;
+        });
+        this.turnQueue = turn.catch(() => undefined);
+        return turn;
+      },
+      { evictOnSettled: true },
+    );
     let cancelTimer: (() => void) | undefined;
     const outcome = await Promise.race([
       observation.then((reply) => ({ reply })),
@@ -278,10 +280,7 @@ export class SystemAgentChatEngine {
     ]);
     cancelTimer?.();
     if (outcome) {
-      if (outcome.reply.text && isTerminalPollReply(outcome.reply)) {
-        this.history.push({ role: "assistant", text: outcome.reply.text });
-      }
-      if (outcome.reply.wizardSettling !== true) {
+      if (isTerminalPollReply(outcome.reply)) {
         this.retainedPollReplies.delete(stepId);
       }
       return outcome.reply;
@@ -328,6 +327,11 @@ export class SystemAgentChatEngine {
 
   private completeTurn(reply: SystemAgentChatReply, userHistoryText: string): SystemAgentChatReply {
     const completed = this.wizard.decorateReply(reply);
+    for (const [pollStepId, retained] of this.retainedPollReplies) {
+      if (retained.reply.step?.id !== completed.step?.id) {
+        this.retainedPollReplies.delete(pollStepId);
+      }
+    }
     this.history.push({ role: "user", text: userHistoryText });
     if (completed.text) {
       this.history.push({ role: "assistant", text: completed.text });
