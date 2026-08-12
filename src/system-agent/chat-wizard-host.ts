@@ -99,7 +99,7 @@ type ActiveWizardBridge = {
 };
 
 const log = createSubsystemLogger("system-agent/chat-wizard-host");
-const SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS = 25 * 60 * 1000;
+export const SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS = 25 * 60 * 1000;
 const WIZARD_CANCEL_HINT = "Say `cancel` to stop this setup.";
 const WIZARD_QR_EXPIRED_MESSAGE =
   "This setup QR code expired. Setup is still finishing the attempt automatically.";

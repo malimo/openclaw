@@ -15,6 +15,7 @@ import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admiss
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
+import { SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS } from "../../system-agent/chat-wizard-host.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
   installSystemAgentPluginMetadataTestSnapshot,
@@ -1078,10 +1079,11 @@ describe("openclaw.chat", () => {
     );
   });
 
-  it("does not evict a terminal QR result while audit and polling finish", async () => {
+  it("protects terminal QR delivery through audit, then expires abandoned retention", async () => {
     const ownerSettled = createDeferred();
     const runnerFinished = createDeferred();
     const auditStarted = createDeferred();
+    const auditFinished = createDeferred();
     const releaseAudit = createDeferred();
     const qrEngine = new SystemAgentChatEngine(
       {
@@ -1103,6 +1105,7 @@ describe("openclaw.chat", () => {
           appendAuditEntry: async () => {
             auditStarted.resolve();
             await releaseAudit.promise;
+            auditFinished.resolve();
             return "audit-entry";
           },
         },
@@ -1135,14 +1138,18 @@ describe("openclaw.chat", () => {
     expect(sessions.has("ordinary-1")).toBe(false);
 
     releaseAudit.resolve();
-    let completed: Awaited<ReturnType<SystemAgentChatEngine["pollStep"]>> | undefined;
-    await vi.waitFor(async () => {
-      const reply = await qrEngine.pollStep(stepId);
-      expect(reply.wizardSettling).not.toBe(true);
-      completed = reply;
-    });
-    expect(completed?.text).toContain("telegram is configured");
+    await auditFinished.promise;
+    await waitOneTask();
+    expect(qrEngine.hasPendingQrCode()).toBe(true);
+
+    const retainedAt = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(retainedAt + SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS + 1);
     expect(qrEngine.hasPendingQrCode()).toBe(false);
+    await expect(
+      callChat(makeContext(sessions), { sessionId: "after-retention" }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(disposeQr).toHaveBeenCalledOnce();
+    expect(sessions.has("qr-applying")).toBe(false);
   });
 
   it("resets a session on request", async () => {

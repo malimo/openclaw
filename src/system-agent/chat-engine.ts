@@ -19,6 +19,7 @@ import {
 } from "./chat-turn-router.js";
 import {
   ChatWizardHost,
+  SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS,
   type ChatWizardHostDependencies,
   type SystemAgentChatReply,
 } from "./chat-wizard-host.js";
@@ -54,6 +55,11 @@ export type SystemAgentChatEngineOptions = {
   operatorApprovalOnly?: boolean;
 };
 
+type RetainedPollReply = {
+  expiresAtMs: number;
+  reply: SystemAgentChatReply;
+};
+
 type SystemAgentChatEngineInternals = {
   wizardDependencies?: ChatWizardHostDependencies;
   executeOperation?: typeof import("./operations.js").executeSystemAgentOperation;
@@ -74,7 +80,7 @@ export class SystemAgentChatEngine {
   private disposed = false;
   private disposal: Promise<void> | null = null;
   private persistentApplySettlement: Promise<void> | null = null;
-  private retainedPollReplies = new Map<string, SystemAgentChatReply>();
+  private retainedPollReplies = new Map<string, RetainedPollReply>();
   private passivePollsInFlight = 0;
 
   constructor(
@@ -123,6 +129,7 @@ export class SystemAgentChatEngine {
   }
 
   hasPendingQrCode(): boolean {
+    this.pruneExpiredPollReplies();
     return (
       this.wizard.hasPendingQrCode() ||
       this.passivePollsInFlight > 0 ||
@@ -212,21 +219,23 @@ export class SystemAgentChatEngine {
   /** Observe a passive wizard step while keeping its continuation in the turn queue. */
   async pollStep(stepId: string): Promise<SystemAgentChatReply> {
     this.assertActive();
+    this.pruneExpiredPollReplies();
     const retained = this.retainedPollReplies.get(stepId);
     if (retained) {
       this.retainedPollReplies.delete(stepId);
-      if (retained.text) {
-        this.history.push({ role: "assistant", text: retained.text });
+      if (retained.reply.text) {
+        this.history.push({ role: "assistant", text: retained.reply.text });
       }
-      return { ...retained };
+      return { ...retained.reply };
     }
     this.passivePollsInFlight += 1;
     const observation = this.turnQueue
       .then(async () => {
         this.assertActive();
+        this.pruneExpiredPollReplies();
         const queuedRetained = this.retainedPollReplies.get(stepId);
         if (queuedRetained) {
-          return { ...queuedRetained };
+          return { ...queuedRetained.reply };
         }
         const result = await this.router.finalizeWizardResult(await this.wizard.pollStep(stepId));
         this.assertActive();
@@ -236,7 +245,10 @@ export class SystemAgentChatEngine {
           reply.wizardInputPending !== true &&
           reply.wizardSettling !== true
         ) {
-          this.retainedPollReplies.set(stepId, { ...reply });
+          this.retainedPollReplies.set(stepId, {
+            expiresAtMs: Date.now() + SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS,
+            reply: { ...reply },
+          });
         }
         return reply;
       })
@@ -270,6 +282,14 @@ export class SystemAgentChatEngine {
       action: "none",
       wizardSettling: true,
     };
+  }
+
+  private pruneExpiredPollReplies(nowMs = Date.now()): void {
+    for (const [stepId, retained] of this.retainedPollReplies) {
+      if (retained.expiresAtMs <= nowMs) {
+        this.retainedPollReplies.delete(stepId);
+      }
+    }
   }
 
   async answerWizard(answer: WizardAnswer): Promise<SystemAgentChatReply> {
