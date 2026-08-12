@@ -36,6 +36,7 @@ import {
   runExclusiveSystemAgentSetupActivation,
   whenAdmittedWizardSessionSettled,
 } from "./setup-admission.js";
+import { retireAndDisposeSystemAgentSessions } from "./system-agent-session-lifecycle.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -577,6 +578,53 @@ describe("openclaw.chat", () => {
     expect(inferenceFallbackMocks.verify).toHaveBeenCalledOnce();
     expect(sessions.size).toBe(1);
     expect([firstCall.ok, secondCall.ok]).toEqual([true, true]);
+  });
+
+  it("joins initialization admitted before retirement and disposes its late engine", async () => {
+    stubEngineOverview();
+    const verificationStarted = createDeferred();
+    const releaseVerification = createDeferred();
+    inferenceFallbackMocks.verify.mockImplementationOnce(async () => {
+      verificationStarted.resolve();
+      await releaseVerification.promise;
+      return {
+        ok: true,
+        modelRef: "openai/gpt-5.5",
+        latencyMs: 10,
+        binding: requireVerifiedInferenceFixture(),
+      };
+    });
+    const dispose = vi.spyOn(SystemAgentChatEngine.prototype, "dispose");
+    const sessions = new Map<string, SystemAgentChatSession>();
+    const { respond } = makeRespond();
+    const initialization = systemAgentHandler("openclaw.chat")({
+      params: { sessionId: "late-initialization" },
+      client: defaultClient,
+      respond,
+      context: makeContext(sessions),
+    } as never);
+    await verificationStarted.promise;
+
+    let retirementResolved = false;
+    const retirement = retireAndDisposeSystemAgentSessions({
+      sessions,
+      wizardSessions: new Map(),
+    }).then(() => {
+      retirementResolved = true;
+    });
+    await waitOneTask();
+    expect(retirementResolved).toBe(false);
+
+    const requestSettlement = expect(initialization).rejects.toThrow(
+      "OpenClaw session owner is shutting down.",
+    );
+    releaseVerification.resolve();
+    await requestSettlement;
+    await retirement;
+
+    expect(retirementResolved).toBe(true);
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(sessions.size).toBe(0);
   });
 
   it("keeps read-only setup detection outside the serialized system-agent lane", async () => {

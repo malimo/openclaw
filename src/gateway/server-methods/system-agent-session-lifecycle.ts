@@ -1,3 +1,4 @@
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createAdmittedWizardSession,
   whenAdmittedWizardSessionSettled,
@@ -11,7 +12,7 @@ type GatewayWizardSession = WizardSessions extends Map<string, infer Session> ? 
 type ApprovalManager = NonNullable<GatewayRequestContext["systemAgentApprovalManager"]>;
 
 const retiredStores = new WeakSet<SystemAgentSessions>();
-const pendingDisposals = new WeakMap<SystemAgentSessions, Set<Promise<void>>>();
+const pendingSessionSettlements = new WeakMap<SystemAgentSessions, Set<Promise<void>>>();
 const retiredWizardStores = new WeakSet<WizardSessions>();
 const pendingWizardAdmissions = new WeakMap<
   WizardSessions,
@@ -24,15 +25,62 @@ export function assertSystemAgentSessionStoreActive(sessions: SystemAgentSession
   }
 }
 
-function trackDisposal(sessions: SystemAgentSessions, disposal: Promise<void>): Promise<void> {
-  let pending = pendingDisposals.get(sessions);
+function trackSessionSettlement(
+  sessions: SystemAgentSessions,
+  settlement: Promise<void>,
+): Promise<void> {
+  let pending = pendingSessionSettlements.get(sessions);
   if (!pending) {
     pending = new Set();
-    pendingDisposals.set(sessions, pending);
+    pendingSessionSettlements.set(sessions, pending);
   }
-  pending.add(disposal);
-  void disposal.finally(() => pending?.delete(disposal)).catch(() => undefined);
-  return disposal;
+  pending.add(settlement);
+  void settlement.finally(() => pending?.delete(settlement)).catch(() => undefined);
+  return settlement;
+}
+
+/** Registers initialization before its first await and owns its engine until map commit. */
+export function initializeSystemAgentSession(
+  sessions: SystemAgentSessions,
+  sessionId: string,
+  initialize: (lease: {
+    ownEngine: (engine: SystemAgentSession["engine"]) => void;
+    commitSession: (session: SystemAgentSession) => void;
+  }) => Promise<void>,
+): Promise<SystemAgentSession | undefined> {
+  assertSystemAgentSessionStoreActive(sessions);
+  const settlement = createDeferredCore();
+  void trackSessionSettlement(sessions, settlement.promise);
+  let uncommittedEngine: SystemAgentSession["engine"] | undefined;
+  let committedSession: SystemAgentSession | undefined;
+  return (async () => {
+    try {
+      await initialize({
+        ownEngine: (engine) => {
+          uncommittedEngine = engine;
+        },
+        commitSession: (session) => {
+          if (uncommittedEngine !== session.engine) {
+            throw new Error("OpenClaw session initialization does not own this engine.");
+          }
+          assertSystemAgentSessionStoreActive(sessions);
+          sessions.set(sessionId, session);
+          // The map and lease never own the engine across an await; commit transfers it here.
+          uncommittedEngine = undefined;
+          committedSession = session;
+        },
+      });
+      return committedSession;
+    } finally {
+      try {
+        await uncommittedEngine?.dispose();
+        settlement.resolve();
+      } catch (error) {
+        // Cleanup belongs to the retiring owner, while the request keeps its original outcome.
+        settlement.reject(error);
+      }
+    }
+  })();
 }
 
 function settleCleanupTasks(
@@ -105,7 +153,7 @@ export function disposeSystemAgentSession(params: {
   }
   // Register disposal in the same turn as removal so shutdown sees either the
   // live map entry or its cleanup, including when approval expiry throws.
-  const disposal = trackDisposal(params.sessions, params.session.engine.dispose());
+  const disposal = trackSessionSettlement(params.sessions, params.session.engine.dispose());
   if (!ownsEntry || !params.session.pendingApproval || !params.approvalManager) {
     return disposal;
   }
@@ -120,7 +168,7 @@ export function disposeSystemAgentSession(params: {
     [disposal, approvalExpiration],
     (errorCount) => `Failed to clean up ${errorCount} OpenClaw session resource(s)`,
   );
-  return trackDisposal(params.sessions, cleanup);
+  return trackSessionSettlement(params.sessions, cleanup);
 }
 
 export function disposeSystemAgentSessionsForOwner(params: {
@@ -147,7 +195,7 @@ export function disposeSystemAgentSessionsForOwner(params: {
     disposals,
     (errorCount) => `Failed to dispose ${errorCount} OpenClaw session(s)`,
   );
-  return trackDisposal(params.sessions, disposal);
+  return trackSessionSettlement(params.sessions, disposal);
 }
 
 export function retireAndDisposeSystemAgentSessions(params: {
@@ -158,7 +206,7 @@ export function retireAndDisposeSystemAgentSessions(params: {
   retiredStores.add(params.sessions);
   retiredWizardStores.add(params.wizardSessions);
   const disposals: Promise<unknown>[] = [
-    ...(pendingDisposals.get(params.sessions) ?? []),
+    ...(pendingSessionSettlements.get(params.sessions) ?? []),
     ...(pendingWizardAdmissions.get(params.wizardSessions) ?? []),
   ];
   for (const [sessionId, session] of params.sessions) {
@@ -181,5 +229,5 @@ export function retireAndDisposeSystemAgentSessions(params: {
     disposals,
     (errorCount) => `Failed to settle ${errorCount} Gateway setup owner(s)`,
   );
-  return trackDisposal(params.sessions, disposal);
+  return trackSessionSettlement(params.sessions, disposal);
 }

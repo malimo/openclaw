@@ -5,6 +5,7 @@ import {
   assertSystemAgentSessionStoreActive,
   admitWizard,
   disposeSystemAgentSessionsForOwner,
+  initializeSystemAgentSession,
   retireAndDisposeSystemAgentSessions,
 } from "./system-agent-session-lifecycle.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -180,5 +181,37 @@ describe("system-agent session lifecycle", () => {
       admitWizard(wizardSessions, "after-retirement", postRetirementFactory, false),
     ).resolves.toBeUndefined();
     expect(postRetirementFactory).not.toHaveBeenCalled();
+  });
+
+  it("reports initialization cleanup failure to retirement without replacing the request error", async () => {
+    const release = createDeferred();
+    const requestError = new Error("request failed");
+    const cleanupError = new Error("cleanup failed");
+    const lateSession = session("device:one", async () => {
+      throw cleanupError;
+    });
+    const sessions = new Map() as Sessions;
+    const initialization = initializeSystemAgentSession(
+      sessions,
+      "late-session",
+      async ({ ownEngine }) => {
+        ownEngine(lateSession.engine);
+        await release.promise;
+        throw requestError;
+      },
+    );
+
+    const retirement = retireAndDisposeSystemAgentSessions({
+      sessions,
+      wizardSessions: new Map(),
+    });
+    const retirementSettlement = expect(retirement).rejects.toMatchObject({
+      errors: [cleanupError],
+    });
+    release.resolve();
+
+    await expect(initialization).rejects.toBe(requestError);
+    await retirementSettlement;
+    expect(sessions.size).toBe(0);
   });
 });
