@@ -700,6 +700,10 @@ export class ChatWizardHost {
       };
     }
     bridge.step = result.step ?? null;
+    if (bridge.step && bridge.step.type !== "qr") {
+      bridge.passiveQrStepId = undefined;
+      bridge.passiveQrRetentionExpiresAtMs = undefined;
+    }
     if (!bridge.session.hasExternalQrPresentationOwner()) {
       this.clearExpiry(bridge);
     }

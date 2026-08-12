@@ -1,5 +1,6 @@
 import "./chat-engine.mocks.test-support.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   fakeOverviewLoader,
   mocks,
@@ -373,11 +374,12 @@ describe("SystemAgentChatEngine wizard", () => {
     expect(cancelled.text).toContain("setup cancelled");
   });
 
-  it("advances after owner completion without a QR acknowledgement", async () => {
+  it("retains a follow-up step without keeping the QR reservation", async () => {
     let settleOwner!: () => void;
     const owner = new Promise<void>((resolve) => {
       settleOwner = resolve;
     });
+    const releaseFollowUp = createDeferred();
     const engine = createQrEngine(async (_channel, prompter) => {
       await prompter.qrCode?.({
         title: "Link a device",
@@ -386,16 +388,26 @@ describe("SystemAgentChatEngine wizard", () => {
         dismissed: owner,
         expiresAtMs: Date.now() + 60_000,
       });
+      await releaseFollowUp.promise;
+      await prompter.text({ message: "Device label" });
     });
 
     const prompt = await engine.handle("connect telegram");
-    expectDefined(prompt.step, "QR step");
+    const qrStepId = expectDefined(prompt.step, "QR step").id;
     settleOwner();
+    await expect(engine.pollStep(qrStepId)).resolves.toMatchObject({ wizardSettling: true });
+    releaseFollowUp.resolve();
 
-    const completed = await engine.handle("status");
-    expect(completed.text).toContain("telegram is configured");
-    expect(completed.step).toBeUndefined();
+    let followUp: Awaited<ReturnType<SystemAgentChatEngine["pollStep"]>> | undefined;
+    await vi.waitFor(async () => {
+      followUp = await engine.pollStep(qrStepId);
+      expect(followUp.step?.type).toBe("text");
+    });
     expect(engine.hasPendingQrCode()).toBe(false);
+    await engine.answerWizard({
+      stepId: expectDefined(followUp?.step, "follow-up step").id,
+      value: "OpenClaw",
+    });
   });
 
   it("waits for an owner-settled QR runner before disposal completes", async () => {
