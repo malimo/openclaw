@@ -89,7 +89,8 @@ export class SystemAgentChatEngine {
   private disposal: Promise<void> | null = null;
   private persistentApplySettlement: Promise<void> | null = null;
   // Passive QR retries share one queued observation. Follow-ups remain until
-  // the wizard advances; terminal replies remain for the recovery lease.
+  // the wizard advances; terminal replies retain their recovery lease but
+  // reserve QR capacity only until a request records their delivery.
   private retainedPollReplies = new Map<string, RetainedPollReply>();
   private passivePollObservations = new Map<string, Promise<SystemAgentChatReply>>();
 
@@ -143,7 +144,10 @@ export class SystemAgentChatEngine {
     return (
       this.wizard.hasPendingQrCode() ||
       this.passivePollObservations.size > 0 ||
-      [...this.retainedPollReplies.values()].some(({ reply }) => isTerminalPollReply(reply))
+      [...this.retainedPollReplies.values()].some(
+        ({ reply, terminalHistoryRecorded }) =>
+          isTerminalPollReply(reply) && !terminalHistoryRecorded,
+      )
     );
   }
 

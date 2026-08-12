@@ -196,6 +196,45 @@ async function runSensitiveChannelSetup(_channel: string, prompter: WizardPrompt
   await prompter.text({ message: "Bot token", sensitive: true });
 }
 
+async function makeDeliveredQrEngine(): Promise<SystemAgentChatEngine> {
+  const ownerSettled = createDeferred();
+  const runnerFinished = createDeferred();
+  const engine = new SystemAgentChatEngine(
+    {
+      verifiedInference: requireVerifiedInferenceFixture(),
+      deps: requireVerifiedInferenceDeps(),
+      supportsQrCode: true,
+    },
+    {
+      wizardDependencies: {
+        runChannelSetupWizard: async (_channel, prompter) => {
+          await prompter.qrCode?.({
+            title: "Link a device",
+            message: "Scan this QR code.",
+            text: "https://example.test/pair",
+            dismissed: ownerSettled.promise,
+          });
+          runnerFinished.resolve();
+        },
+      },
+    },
+  );
+  const prompt = await engine.handle("connect telegram");
+  const stepId = expectDefined(prompt.step?.id, "QR step id");
+  ownerSettled.resolve();
+  await runnerFinished.promise;
+  await waitOneTask();
+  await engine.pollStep(stepId);
+  await engine.resolveOperatorApproval(null, "queue-drain");
+  const terminal = await engine.pollStep(stepId);
+  expect(terminal).not.toMatchObject({ wizardSettling: true });
+  expect(terminal).not.toHaveProperty("step");
+  expect(terminal.text).toContain("is configured");
+  expect(engine.historySince(0)).toContainEqual({ role: "assistant", text: terminal.text });
+  await expect(engine.pollStep(stepId)).resolves.toEqual(terminal);
+  return engine;
+}
+
 function stubEngineOverview() {
   return vi.spyOn(SystemAgentChatEngine.prototype, "loadOverview").mockResolvedValue({
     config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: null },
@@ -1149,6 +1188,33 @@ describe("openclaw.chat", () => {
     expect([...sessions.keys()]).toEqual(
       Array.from({ length: 8 }, (_value, index) => `protected-${index}`),
     );
+  });
+
+  it("admits a new session when eight retained QR terminals were already delivered", async () => {
+    const engines = await Promise.all(
+      Array.from({ length: 8 }, async () => await makeDeliveredQrEngine()),
+    );
+    expect(engines.map((engine) => engine.hasPendingQrCode())).toEqual(
+      Array.from({ length: 8 }, () => false),
+    );
+    const sessions = new Map<string, SystemAgentChatSession>(
+      engines.map((engine, index) => [
+        `delivered-${index}`,
+        seededSession({
+          engine,
+          lastUsedAt: index,
+          ownerKey: `device:owner-${index}`,
+        }),
+      ]),
+    );
+    stubEngineOverview();
+
+    const result = await callChat(makeContext(sessions), { sessionId: "new-session" });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(sessions.size).toBe(8);
+    expect(sessions.has("delivered-0")).toBe(false);
+    expect(sessions.has("new-session")).toBe(true);
   });
 
   it("protects terminal QR delivery through audit, then expires abandoned retention", async () => {
