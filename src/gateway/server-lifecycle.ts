@@ -22,6 +22,7 @@ import { clearNodeWakeState } from "./node-wake-state.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
+import { runGatewayLifecycleSteps } from "./server-lifecycle-steps.js";
 import { createGatewayServerLiveState } from "./server-live-state.js";
 import { retireAndDisposeSystemAgentSessions } from "./server-methods/system-agent-session-lifecycle.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -430,15 +431,15 @@ export async function prepareGatewayLifecycle(params: {
     markClosePreludeStarted();
     // Owners are fenced synchronously above. Join them before any runtime they
     // can publish into is torn down.
-    await Promise.all([
+    const ownerSettlements = [
       stopOutboundDeliveryRecoveryForClose(),
       stopMediaCleanupForClose(),
       stopConfigReloaderForClose().catch(() => {}),
       systemAgentSessionsResident.stop(),
-    ]);
+    ];
+    await runGatewayLifecycleSteps(ownerSettlements.map((settlement) => () => settlement));
   };
-  const runClosePrelude = async () => {
-    await beginClosePrelude();
+  const finishClosePrelude = async () => {
     disposeNodeConnectionNotifications(nodeRegistry);
     watchNodeHttpRuntime.close();
     clearPluginMetadataLifecycleCaches();
@@ -466,6 +467,7 @@ export async function prepareGatewayLifecycle(params: {
       closeMcpServer: shutdownRuntime.closeMcpLoopbackServer,
     });
   };
+  const runClosePrelude = () => runGatewayLifecycleSteps([beginClosePrelude, finishClosePrelude]);
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
   const refreshGatewayHealthSnapshotWithRuntime: typeof refreshGatewayHealthSnapshot = (
@@ -568,11 +570,13 @@ export async function prepareGatewayLifecycle(params: {
   let clearFallbackGatewayContextForServer = () => {};
   const closeOnStartupFailure = async () => {
     try {
-      await beginClosePrelude();
-      await stopRegisteredGatewayLifetimeSidecars();
-      await stopRegisteredPostReadySidecars();
-      await runClosePrelude();
-      await createCloseHandler()({ reason: "gateway startup failed" });
+      await runGatewayLifecycleSteps([
+        beginClosePrelude,
+        stopRegisteredGatewayLifetimeSidecars,
+        stopRegisteredPostReadySidecars,
+        runClosePrelude,
+        () => createCloseHandler()({ reason: "gateway startup failed" }),
+      ]);
     } finally {
       clearFallbackGatewayContextForServer();
     }
