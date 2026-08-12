@@ -1078,6 +1078,55 @@ describe("openclaw.chat", () => {
     );
   });
 
+  it("does not evict a QR runner after its presentation owner settles", async () => {
+    const ownerSettled = createDeferred();
+    const runnerReachedApply = createDeferred();
+    const releaseApply = createDeferred();
+    const qrEngine = new SystemAgentChatEngine(
+      {
+        verifiedInference: requireVerifiedInferenceFixture(),
+        deps: requireVerifiedInferenceDeps(),
+        supportsQrCode: true,
+      },
+      {
+        wizardDependencies: {
+          runChannelSetupWizard: async (_channel, prompter) => {
+            await prompter.qrCode?.({
+              title: "Link a device",
+              message: "Scan this QR code.",
+              text: "https://example.test/pair",
+              dismissed: ownerSettled.promise,
+            });
+            runnerReachedApply.resolve();
+            await releaseApply.promise;
+          },
+        },
+      },
+    );
+    const prompt = await qrEngine.handle("connect telegram");
+    expect(prompt.step?.type).toBe("qr");
+    ownerSettled.resolve();
+    await runnerReachedApply.promise;
+    expect(qrEngine.hasPendingQrCode()).toBe(true);
+
+    const qrSession = seededSession({ engine: qrEngine, lastUsedAt: 0 });
+    const disposeQr = vi.spyOn(qrEngine, "dispose");
+    const sessions = new Map<string, SystemAgentChatSession>([["qr-applying", qrSession]]);
+    for (let index = 1; index < 8; index += 1) {
+      sessions.set(`ordinary-${index}`, seededSession({ lastUsedAt: index }));
+    }
+    stubEngineOverview();
+
+    const admission = callChat(makeContext(sessions), { sessionId: "new-session" });
+    await waitOneTask();
+
+    expect(disposeQr).not.toHaveBeenCalled();
+    releaseApply.resolve();
+    expect(await admission).toMatchObject({ ok: true });
+    expect(sessions.has("qr-applying")).toBe(true);
+    expect(sessions.has("ordinary-1")).toBe(false);
+  });
+
   it("resets a session on request", async () => {
     stubEngineOverview();
     transcriptStoreMocks.readTranscriptTail.mockReturnValue([]);

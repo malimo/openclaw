@@ -134,7 +134,7 @@ export class ChatWizardHost {
 
   /** A QR-owning wizard stays protected until its runner can no longer mutate setup state. */
   hasPendingQrCode(): boolean {
-    return Boolean(this.bridge?.step?.qrDataUrl || this.bridge?.session.hasOwnedQrPresentation());
+    return this.bridge?.passiveQrStepId !== undefined && !this.bridge.session.isSettled();
   }
 
   whenSettled(): Promise<void> | null {
