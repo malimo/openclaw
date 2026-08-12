@@ -6,7 +6,8 @@ import type { WizardPrompter } from "./prompts.js";
 import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "./session.js";
 
 const QR_TEXT = "https://example.test/pair";
-const QR_DATA_URL = "data:image/png;base64,qr";
+const QR_DATA_URL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const qrImageMocks = vi.hoisted(() => ({
   renderQrPngDataUrlWithinLimit: vi.fn(async () => QR_DATA_URL),
 }));
@@ -276,6 +277,21 @@ describe("WizardSession", () => {
     });
     expect((await unsupported.next()).status).toBe("done");
     expect(unsupportedHasQr).toBe(false);
+  });
+
+  test("rejects invalid PNG output at the QR presentation owner", async () => {
+    qrImageMocks.renderQrPngDataUrlWithinLimit.mockResolvedValueOnce(
+      "data:image/png;base64,iVBORw0KGgp=",
+    );
+    const session = createQrSession(async (prompter) => {
+      await presentQr(prompter, Promise.resolve());
+    });
+
+    await expect(session.next()).resolves.toMatchObject({
+      done: true,
+      status: "error",
+      error: "Error: wizard: QR renderer returned an invalid PNG data URL",
+    });
   });
 
   test("advances only when the QR owner settles and rejects stale acknowledgements", async () => {

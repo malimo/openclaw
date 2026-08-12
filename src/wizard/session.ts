@@ -1,7 +1,11 @@
 // Wizard session helpers track onboarding session ids and state.
 import { randomUUID } from "node:crypto";
+import { Value } from "typebox/value";
 import type { WizardStep as ProtocolWizardStep } from "../../packages/gateway-protocol/src/index.js";
-import { QR_PNG_DATA_URL_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/qr.js";
+import {
+  QrPngDataUrlSchema,
+  QR_PNG_DATA_URL_MAX_LENGTH,
+} from "../../packages/gateway-protocol/src/schema/qr.js";
 import { renderQrPngDataUrlWithinLimit } from "../media/qr-image.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
@@ -123,6 +127,9 @@ class WizardSessionPrompter implements WizardPrompter {
           params.text,
           QR_PNG_DATA_URL_MAX_LENGTH,
         );
+        if (!Value.Check(QrPngDataUrlSchema, qrDataUrl)) {
+          throw new Error("wizard: QR renderer returned an invalid PNG data URL");
+        }
         const step = this.createStep({
           type: "qr",
           title: params.title,
