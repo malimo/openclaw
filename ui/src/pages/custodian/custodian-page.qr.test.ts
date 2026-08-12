@@ -218,6 +218,72 @@ describe("custodian QR wizard step", () => {
     expect(page.textContent).toContain("Signal is configured.");
   });
 
+  it("starts fresh instead of polling when the authenticated owner changes", async () => {
+    vi.useFakeTimers();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(qrResult())
+      .mockResolvedValueOnce(terminalResult("Fresh owner session.", "replacement-session"));
+    const { context, setGatewaySnapshot } = createContext(request);
+    const hello = context.gateway.snapshot.hello!;
+    const { page } = await mountPage(context);
+    await vi.advanceTimersByTimeAsync(0);
+
+    setGatewaySnapshot({
+      client: { request } as unknown as GatewayBrowserClient,
+      hello: {
+        ...hello,
+        auth: { ...hello.auth, recoveryScope: "different-owner" },
+      },
+    });
+    await page.updateComplete;
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("pollStepId");
+    expect(request.mock.calls[1]?.[1]?.sessionId).not.toBe(SESSION_ID);
+    expect(page.store.messages.some((message) => message.step?.qrDataUrl)).toBe(false);
+  });
+
+  it("does not poll while replacement-client ownership is unresolved", async () => {
+    vi.useFakeTimers();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(qrResult())
+      .mockResolvedValueOnce(terminalResult("Fresh unowned session.", "replacement-session"));
+    let recoveryScopeReady = false;
+    const replacement = {
+      request,
+      get recoveryScopeReady() {
+        return recoveryScopeReady;
+      },
+      get recoveryScope() {
+        return "";
+      },
+    } as unknown as GatewayBrowserClient;
+    const { context, setGatewaySnapshot } = createContext(request);
+    const hello = context.gateway.snapshot.hello!;
+    const { page } = await mountPage(context);
+    await vi.advanceTimersByTimeAsync(0);
+
+    setGatewaySnapshot({
+      client: replacement,
+      hello: { ...hello, auth: { role: "operator", scopes: ["operator.admin"] } },
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(page.store.messages.some((message) => message.step?.qrDataUrl)).toBe(false);
+
+    recoveryScopeReady = true;
+    setGatewaySnapshot({});
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("pollStepId");
+    expect(request.mock.calls[1]?.[1]?.sessionId).not.toBe(SESSION_ID);
+  });
+
   it("scrubs the QR and starts fresh after poll session invalidation", async () => {
     vi.useFakeTimers();
     const request = vi

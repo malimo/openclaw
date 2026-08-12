@@ -24,8 +24,8 @@ import {
   hasCustodianUserInput,
   resetCustodianWizardState,
   resolveCustodianConfiguredInferenceState,
+  resolveCustodianSessionOwnershipKey,
   type CustodianConfiguredInferenceState,
-  CustodianSessionState,
 } from "./custodian-session-state.ts";
 import { custodianWizardSubmission } from "./custodian-wizard-step.ts";
 import * as eventNudgeState from "./event-nudge.ts";
@@ -83,7 +83,6 @@ export class CustodianSessionStore {
   private sessionOwnershipKey: string | null = null;
   private sessionStarted = false;
   private configuredInferenceState: CustodianConfiguredInferenceState = "unresolved";
-  private readonly sessionState = new CustodianSessionState();
   private eventNudgeClosed = false;
   private gatewayCleanup: (() => void) | null = null;
   private agentCleanup: (() => void) | null = null;
@@ -420,7 +419,7 @@ export class CustodianSessionStore {
     this.sessionId = createCustodianSessionId();
     this.sessionVariant = variant;
     this.sessionClient = client;
-    this.sessionOwnershipKey = this.sessionState.ownershipKey(this.context);
+    this.sessionOwnershipKey = resolveCustodianSessionOwnershipKey(this.context) ?? null;
     this.sessionStarted = true;
     void this.initializeSession(
       client,
@@ -466,14 +465,16 @@ export class CustodianSessionStore {
     const inferenceStateChanged = configuredInferenceState !== this.configuredInferenceState;
     this.configuredInferenceState = configuredInferenceState;
     const variantChanged = this.sessionStarted && this.sessionVariant !== this.variant;
-    const ownershipKey = this.sessionState.ownershipKey(this.context);
+    const ownershipKey = resolveCustodianSessionOwnershipKey(this.context);
     const clientReplaced =
       this.sessionStarted &&
       client !== null &&
       this.sessionClient !== null &&
       client !== this.sessionClient;
     const ownershipChanged =
-      this.sessionOwnershipKey !== null && ownershipKey !== this.sessionOwnershipKey;
+      this.sessionStarted &&
+      ownershipKey !== undefined &&
+      (ownershipKey !== this.sessionOwnershipKey || (clientReplaced && ownershipKey === null));
     const pendingQrStepId = this.qrSession.pendingStepId(
       this.wizardInputPending || this.wizardSettling,
     );
@@ -488,31 +489,29 @@ export class CustodianSessionStore {
       return;
     }
     this.qrSession.clearAndScrub();
-    const requestWasPending = this.sending && this.retryParams !== null;
-    const pendingParams = requestWasPending ? this.retryParams : null;
-    this.activeClient = client;
+    const pendingParams = this.sending && this.retryParams ? this.retryParams : null;
+    [this.activeClient, this.sending, this.chatAvailable] = [client, false, false];
     this.requestEpoch += 1;
-    this.sending = false;
-    this.chatAvailable = false;
+    if (clientReplaced && !chatSupported) {
+      this.sessionStarted = false;
+      this.abandonPendingUserTurn(pendingParams);
+      this.error = chatUnsupported ? t("custodian.unsupportedGateway") : null;
+      return;
+    }
+    if (client && ownershipKey === undefined) {
+      this.abandonPendingUserTurn(pendingParams);
+      return;
+    }
     if (variantChanged || ownershipChanged) {
-      // A different operator or route mode must never inherit retained live context.
       [this.eventNudge, this.eventNudgePending] = [null, null];
       this.eventNudgeClosed = false;
       this.abandonedTurnOutcomeUnknown = false;
       this.sessionStarted = false;
       this.clearConversation();
     } else if (client && clientReplaced) {
-      if (!chatSupported) {
-        this.sessionStarted = false;
-        this.abandonPendingUserTurn(pendingParams);
-        this.error = chatUnsupported ? t("custodian.unsupportedGateway") : null;
-        return;
-      }
       this.chatAvailable = true;
       this.abandonPendingUserTurn(pendingParams);
       if (pendingQrStepId) {
-        // The Gateway owns reconnect authorization. Resume observation with the retained
-        // session id and rotate only if it returns the typed invalidation response.
         this.retryParams = null;
         this.error = null;
         this.sessionClient = client;
@@ -521,7 +520,7 @@ export class CustodianSessionStore {
       }
       this.rotateVolatileSession(client, this.variant);
       return;
-    } else if (requestWasPending) {
+    } else if (pendingParams) {
       if (pendingParams?.message === undefined) {
         this.error = t("custodian.connectionChanged");
       }
@@ -549,7 +548,7 @@ export class CustodianSessionStore {
     }
     if (this.sessionStarted) {
       if (!this.retryParams) {
-        this.error = requestWasPending ? this.error : null;
+        this.error = pendingParams ? this.error : null;
       }
       const pendingStep =
         this.wizardInputPending || this.wizardSettling

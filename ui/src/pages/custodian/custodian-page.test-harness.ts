@@ -51,7 +51,11 @@ export function createContext(
     hello: {
       type: "hello-ok" as const,
       protocol: 1,
-      auth: { role: "operator", scopes: ["operator.admin"] },
+      auth: {
+        role: "operator",
+        scopes: ["operator.admin"],
+        recoveryScope: "custodian-test-owner",
+      },
       features: {
         methods,
         capabilities: options.gatewayCapabilities ?? [

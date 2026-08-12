@@ -43,34 +43,27 @@ export function resolveCustodianConfiguredInferenceState(
   return selectedAgent.model?.primary?.trim() ? "ready" : "required";
 }
 
-function resolveCustodianSessionOwnership(params: {
-  context: ApplicationContext | null;
-  lastHelloDeviceToken: string;
-}): { key: string; lastHelloDeviceToken: string } {
-  const context = params.context;
-  if (!context) {
-    return { key: "", lastHelloDeviceToken: params.lastHelloDeviceToken };
+/**
+ * Resolve the Gateway-authoritative reconnect owner. `undefined` means the
+ * browser is still deriving a legacy scope; `null` means no durable owner exists.
+ */
+export function resolveCustodianSessionOwnershipKey(
+  context: ApplicationContext | null,
+): string | null | undefined {
+  if (!context || context.gateway.snapshot.phase !== "connected") {
+    return undefined;
   }
+  const snapshot = context.gateway.snapshot;
+  const serverScope = snapshot.hello?.auth.recoveryScope?.trim();
+  const client = snapshot.client;
+  if (!serverScope && !client?.recoveryScopeReady) {
+    return undefined;
+  }
+  const recoveryScope = serverScope || client?.recoveryScope.trim();
   const { gatewayUrl, token, password, bootstrapToken } = context.gateway.connection;
-  const auth = context.gateway.snapshot.hello?.auth;
-  const lastHelloDeviceToken = auth ? (auth.deviceToken ?? "") : params.lastHelloDeviceToken;
-  return {
-    key: JSON.stringify([gatewayUrl, token, password, bootstrapToken, lastHelloDeviceToken]),
-    lastHelloDeviceToken,
-  };
-}
-
-export class CustodianSessionState {
-  private lastHelloDeviceToken = "";
-
-  ownershipKey(context: ApplicationContext | null): string {
-    const ownership = resolveCustodianSessionOwnership({
-      context,
-      lastHelloDeviceToken: this.lastHelloDeviceToken,
-    });
-    this.lastHelloDeviceToken = ownership.lastHelloDeviceToken;
-    return ownership.key;
-  }
+  return recoveryScope
+    ? JSON.stringify([gatewayUrl, token, password, bootstrapToken, recoveryScope])
+    : null;
 }
 
 export function resetCustodianWizardState(state: CustodianWizardState): void {

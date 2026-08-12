@@ -29,7 +29,11 @@ function createContext(request: ReturnType<typeof vi.fn>) {
     hello: {
       type: "hello-ok",
       protocol: 1,
-      auth: { role: "operator", scopes: ["operator.admin"] },
+      auth: {
+        role: "operator",
+        scopes: ["operator.admin"],
+        recoveryScope: "custodian-test-owner",
+      },
       features: { methods: ["openclaw.chat"] },
     },
     assistantAgentId: "main",
