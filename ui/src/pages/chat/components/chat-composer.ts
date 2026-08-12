@@ -6,7 +6,10 @@ import { t } from "../../../i18n/index.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { ComposerDictationController, insertComposerDictation } from "../composer-dictation.ts";
 import { discoverRealtimeTalkInputs, observeRealtimeTalkDevices } from "../realtime-talk-input.ts";
-import { isLargePastedTextAttachment } from "./chat-attachments.ts";
+import {
+  createChatAttachmentDropHandlers,
+  isLargePastedTextAttachment,
+} from "./chat-attachments.ts";
 import { renderContextNotice } from "./chat-composer-context.ts";
 import { renderMicrophonePicker, type ChatRunControlsProps } from "./chat-composer-controls.ts";
 import {
@@ -52,21 +55,26 @@ export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.
 
 export function renderChatComposer(props: ChatComposerProps) {
   const state = getChatComposerState(props.paneId);
+  const isSessionStyle = props.style !== "new-session";
   const canCompose = props.canSend;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const hasTerminalStatus = hasTerminalRunStatus(props.runStatus);
   const showAbortableUi = canAbort && !hasTerminalStatus;
-  const submittedProgress = props.queue.find((item) =>
-    isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
-  );
+  const submittedProgress = isSessionStyle
+    ? props.queue.find((item) =>
+        isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
+      )
+    : undefined;
   const composerRunStatus =
     showAbortableUi || Boolean(submittedProgress)
       ? { phase: "in-progress" as const }
       : props.runStatus;
   const compactBusy =
     props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
-  const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
+  const activeSession = isSessionStyle
+    ? props.sessions?.sessions?.find((row) => row.key === props.sessionKey)
+    : undefined;
   const draftKey = composerDraftKey(props);
   if (state.dictationDraftKey !== null && state.dictationDraftKey !== draftKey) {
     state.dictation?.dispose();
@@ -103,17 +111,15 @@ export function renderChatComposer(props: ChatComposerProps) {
   const hasVisualAttachments = (props.attachments ?? []).some(
     (attachment) => !isLargePastedTextAttachment(attachment),
   );
-  const contextNotice = renderContextNotice(
-    activeSession,
-    props.sessions?.defaults?.contextTokens ?? null,
-    {
-      compactBusy,
-      compactDisabled: !props.connected || !canCompose || isBusy || showAbortableUi,
-      messages: props.messages,
-      onCompact: props.onCompact,
-      providerUsage: props.providerUsage,
-    },
-  );
+  const contextNotice = isSessionStyle
+    ? renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
+        compactBusy,
+        compactDisabled: !props.connected || !canCompose || isBusy || showAbortableUi,
+        messages: props.messages,
+        onCompact: props.onCompact,
+        providerUsage: props.providerUsage,
+      })
+    : nothing;
   const composerControls = props.composerControls ?? nothing;
   const assistantName = props.assistantName || "OpenClaw";
   const inProgressLabel = props.waitingApproval
@@ -128,7 +134,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   // Persistent sr-only live region: run phases are otherwise conveyed only
   // visually (thread spark, content arriving, interrupted toast).
   const runStatusAnnouncement =
-    composerRunStatus == null
+    !isSessionStyle || composerRunStatus == null
       ? ""
       : composerRunStatus.phase === "in-progress"
         ? inProgressLabel
@@ -138,17 +144,19 @@ export function renderChatComposer(props: ChatComposerProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
   const steerNowEnabled =
+    isSessionStyle &&
     props.connected &&
     sendShortcut === "enter" &&
     showAbortableUi &&
     props.followUpMode === "queue";
-  const gatewayQuestionPrompts =
-    props.gatewayQuestionPrompts?.filter(
-      (prompt) =>
-        prompt.status === "pending" &&
-        prompt.sessionKey !== undefined &&
-        areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey),
-    ) ?? [];
+  const gatewayQuestionPrompts = isSessionStyle
+    ? (props.gatewayQuestionPrompts?.filter(
+        (prompt) =>
+          prompt.status === "pending" &&
+          prompt.sessionKey !== undefined &&
+          areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey),
+       ) ?? [])
+    : [];
   let gatewayQuestionIndex = gatewayQuestionPrompts.findIndex(
     (prompt) => prompt.id === state.activeGatewayQuestionId,
   );
@@ -215,16 +223,17 @@ export function renderChatComposer(props: ChatComposerProps) {
   const showComposer = !questionTakeoverActive;
 
   const placeholder =
-    !canCompose && props.disabledReason
+    props.placeholder ??
+    (!canCompose && props.disabledReason
       ? props.disabledReason
       : hasVisualAttachments
         ? t("chat.composer.placeholderWithAttachments")
-        : t("chat.composer.placeholder", { name: props.assistantName || "agent" });
+        : t("chat.composer.placeholder", { name: props.assistantName || "agent" }));
 
   // Offline text and attachments may enter the persisted reconnect queue, but
   // slash commands are live controls and must not execute against stale state.
   const canSubmitDraft = (draft: string) =>
-    canCompose &&
+    (props.canSubmit ?? canCompose) &&
     !(state.skillMenuOpen && state.skillCommandRefreshPending) &&
     (props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0) === 0 &&
     (props.connected || !draft.trimStart().startsWith("/"));
@@ -415,71 +424,75 @@ export function renderChatComposer(props: ChatComposerProps) {
     state.microphonePickerOpen = false;
     requestUpdate();
   };
-  const selectedMicrophoneId = loadSettings().realtimeTalkInputDeviceId?.trim() ?? "";
-  const microphonePicker = props.onToggleRealtimeTalk
-    ? renderMicrophonePicker({
-        devices: state.microphoneDevices,
-        loading: state.microphonePickerLoading,
-        open: state.microphonePickerOpen,
-        selectedDeviceId: selectedMicrophoneId,
-        voiceActive: Boolean(props.realtimeTalkActive),
-        issue: state.microphoneIssue,
-        onOpen: openMicrophonePicker,
-        onClose: closeMicrophonePicker,
-        onSelect: selectMicrophone,
-      })
-    : nothing;
-  const dictationOptions = {
-    client: props.gatewayClient ?? null,
-    connected: props.connected,
-    enabled: props.composerHoldToRecord !== false,
-    realtimeTalkActive: props.realtimeTalkActive === true,
-    onCommit: (transcript: string) => {
-      const target = state.composerTextarea;
-      const selection = state.dictationSelection ?? {
-        start: target?.selectionStart ?? visibleDraft.length,
-        end: target?.selectionEnd ?? visibleDraft.length,
-      };
-      const currentDraft = target?.value ?? props.getDraft?.() ?? props.draft;
-      const insertion = insertComposerDictation(
-        currentDraft,
-        transcript,
-        selection.start,
-        selection.end,
-      );
-      if (target) {
-        target.value = insertion.value;
-        adjustTextareaHeight(target);
-      }
-      commitComposerDraft(props, insertion.value);
-      state.dictationSelection = null;
-      requestUpdate();
-      queueMicrotask(() => {
-        const textarea = state.composerTextarea;
-        if (!textarea) {
-          return;
+  const microphonePicker =
+    isSessionStyle && props.onToggleRealtimeTalk
+      ? renderMicrophonePicker({
+          devices: state.microphoneDevices,
+          loading: state.microphonePickerLoading,
+          open: state.microphonePickerOpen,
+          selectedDeviceId: loadSettings().realtimeTalkInputDeviceId?.trim() ?? "",
+          voiceActive: Boolean(props.realtimeTalkActive),
+          issue: state.microphoneIssue,
+          onOpen: openMicrophonePicker,
+          onClose: closeMicrophonePicker,
+          onSelect: selectMicrophone,
+        })
+      : nothing;
+  let dictation: ComposerDictationController | undefined;
+  if (isSessionStyle && props.onToggleRealtimeTalk && props.composerHoldToRecord !== false) {
+    const dictationOptions = {
+      client: props.gatewayClient ?? null,
+      connected: props.connected,
+      enabled: true,
+      realtimeTalkActive: props.realtimeTalkActive === true,
+      onCommit: (transcript: string) => {
+        const target = state.composerTextarea;
+        const selection = state.dictationSelection ?? {
+          start: target?.selectionStart ?? visibleDraft.length,
+          end: target?.selectionEnd ?? visibleDraft.length,
+        };
+        const currentDraft = target?.value ?? props.getDraft?.() ?? props.draft;
+        const insertion = insertComposerDictation(
+          currentDraft,
+          transcript,
+          selection.start,
+          selection.end,
+        );
+        if (target) {
+          target.value = insertion.value;
+          adjustTextareaHeight(target);
         }
-        textarea.focus({ preventScroll: true });
-        textarea.selectionStart = insertion.caret;
-        textarea.selectionEnd = insertion.caret;
-      });
-    },
-    onError: (message: string) => props.onDictationError?.(message),
-    onStateChange: requestUpdate,
-    // With an initial empty composer, this button retains the existing
-    // send-after-typing behavior until the host rerenders the primary actions.
-    // Once a draft is rendered, the separate voice control starts Talk directly.
-    onTap:
-      visibleDraft.trim() || props.attachments?.length
-        ? () => props.onToggleRealtimeTalk?.()
-        : handleVoicePrimaryAction,
-  };
-  state.dictation ??= new ComposerDictationController(dictationOptions);
-  state.dictation.update(dictationOptions);
-  const dictation =
-    props.onToggleRealtimeTalk && props.composerHoldToRecord !== false
-      ? state.dictation
-      : undefined;
+        commitComposerDraft(props, insertion.value);
+        state.dictationSelection = null;
+        requestUpdate();
+        queueMicrotask(() => {
+          const textarea = state.composerTextarea;
+          if (!textarea) {
+            return;
+          }
+          textarea.focus({ preventScroll: true });
+          textarea.selectionStart = insertion.caret;
+          textarea.selectionEnd = insertion.caret;
+        });
+      },
+      onError: (message: string) => props.onDictationError?.(message),
+      onStateChange: requestUpdate,
+      // With an initial empty composer, this button retains the existing
+      // send-after-typing behavior until the host rerenders the primary actions.
+      // Once a draft is rendered, the separate voice control starts Talk directly.
+      onTap:
+        visibleDraft.trim() || props.attachments?.length
+          ? () => props.onToggleRealtimeTalk?.()
+          : handleVoicePrimaryAction,
+    };
+    state.dictation ??= new ComposerDictationController(dictationOptions);
+    state.dictation.update(dictationOptions);
+    dictation = state.dictation;
+  } else if (state.dictation) {
+    state.dictation.dispose();
+    state.dictation = null;
+    state.dictationSelection = null;
+  }
   const handleDictationPointerDown = (event: PointerEvent) => {
     const target = state.composerTextarea;
     state.dictationSelection = {
@@ -518,9 +531,9 @@ export function renderChatComposer(props: ChatComposerProps) {
     onPrimaryActionPointerDown: (event) =>
       preserveComposerFocusOnPrimaryAction(event, state.composerTextarea),
   };
-  const cameraFacingMode = props.realtimeTalkVideoStream
-    ?.getVideoTracks?.()[0]
-    ?.getSettings?.().facingMode;
+  const cameraFacingMode = isSessionStyle
+    ? props.realtimeTalkVideoStream?.getVideoTracks?.()[0]?.getSettings?.().facingMode
+    : undefined;
   const mirrorCameraPreview = cameraFacingMode !== "environment";
   const slashMenuVisible = props.connected && canCompose && isSlashMenuVisible(state);
   const skillMenuVisible = props.connected && canCompose && isSkillMenuVisible(state);
@@ -538,6 +551,9 @@ export function renderChatComposer(props: ChatComposerProps) {
     skillMenuVisible ? "skill-menu-listbox" : "slash-menu-listbox",
   );
   const slashMenuAnnouncementId = paneDomId(props.paneId, "slash-active-announcement");
+  const attachmentDropHandlers = isSessionStyle
+    ? null
+    : createChatAttachmentDropHandlers({ ...props, canCompose });
 
   return renderChatComposerView({
     props,
@@ -571,5 +587,6 @@ export function renderChatComposer(props: ChatComposerProps) {
     slashMenuListboxId,
     slashMenuAnnouncementId,
     composerRunStatus,
+    attachmentDropHandlers,
   });
 }

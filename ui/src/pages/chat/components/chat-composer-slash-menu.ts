@@ -83,7 +83,9 @@ export function updateSlashMenu(
       closeSlashMenuIfNeeded(state, requestUpdate);
       return;
     }
-    const cmd = SLASH_COMMANDS.find((entry) => entry.name === cmdName);
+    const cmd = SLASH_COMMANDS.find(
+      (entry) => entry.name === cmdName && (props.commandFilter?.(entry) ?? true),
+    );
     if (cmd?.argOptions?.length) {
       const filtered = argFilter
         ? cmd.argOptions.filter((arg) => arg.toLowerCase().startsWith(argFilter))
@@ -108,7 +110,9 @@ export function updateSlashMenu(
     if (!opts.skipSlashIntent) {
       requestSlashCommandRefresh(value, props, requestUpdate, getCurrentValue);
     }
-    const items = getSlashCommandCompletions(match[1] ?? "", { showAll: true });
+    const items = getSlashCommandCompletions(match[1] ?? "", { showAll: true }).filter(
+      (command) => props.commandFilter?.(command) ?? true,
+    );
     state.slashMenuItems = items;
     state.slashMenuOpen = items.length > 0;
     state.slashMenuIndex = 0;

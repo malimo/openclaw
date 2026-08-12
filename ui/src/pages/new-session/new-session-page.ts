@@ -19,6 +19,7 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
 import "../../styles/new-session.css";
 import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
+import { resetChatComposerState } from "../chat/components/chat-composer.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import * as catalog from "./catalog-target.ts";
 import type { SubmissionOutcomeReason } from "./cloud-recovery-state.ts";
@@ -236,6 +237,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.browser.disconnect();
     this.submission.disconnect();
     this.closeConnectMachine();
+    resetChatComposerState("new-session");
     super.disconnectedCallback();
   }
 
@@ -604,7 +606,6 @@ class NewSessionPage extends OpenClawLightDomElement {
           modelControl: this.place.modelControl,
           requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
           submitting: this.submission.submitting,
-          textareaController: this.submission.composerTextarea,
           messageLocked: Boolean(this.submission.pendingCloud.sessionKey),
           terminalAction: this.submission.showStartInTerminal()
             ? {
@@ -621,6 +622,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           onOpenImage: (item) => {
             this.imageLightbox = item;
           },
+          onRequestUpdate: () => this.requestUpdate(),
           onVisibilityChange: (visibility) => {
             if (!this.submission.submitting && !this.submission.pendingCloud.sessionKey) {
               this.submission.setVisibility(visibility);

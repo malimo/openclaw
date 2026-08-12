@@ -33,6 +33,32 @@ async function withNewSessionPage(run: (page: Page) => Promise<void>): Promise<v
   }
 }
 
+async function expectComposerCompletionWithinViewport(page: Page): Promise<void> {
+  const geometry = await page.evaluate(() => {
+    const composer = document.querySelector<HTMLElement>(".agent-chat__composer-shell");
+    const picker = document.querySelector<HTMLElement>(".skill-menu");
+    if (!composer || !picker) {
+      return null;
+    }
+    const composerRect = composer.getBoundingClientRect();
+    const pickerRect = picker.getBoundingClientRect();
+    return {
+      composerInside:
+        composerRect.left >= 0 &&
+        composerRect.right <= window.innerWidth &&
+        composerRect.top >= 0 &&
+        composerRect.bottom <= window.innerHeight,
+      documentFits: document.documentElement.scrollWidth <= window.innerWidth,
+      pickerInside:
+        pickerRect.left >= 0 &&
+        pickerRect.right <= window.innerWidth &&
+        pickerRect.top >= 0 &&
+        pickerRect.bottom <= window.innerHeight,
+    };
+  });
+  expect(geometry).toEqual({ composerInside: true, documentFits: true, pickerInside: true });
+}
+
 suite.define(() => {
   it("restores prompt text and files after navigating away and back", async () => {
     await withNewSessionPage(async (page) => {
@@ -69,6 +95,79 @@ suite.define(() => {
         .poll(() => page.locator(".chat-attachment-thumb img").getAttribute("src"))
         .toMatch(/^(blob:|data:image\/png;base64,)/u);
       await captureUiProof(page, "new-session-draft-restored.png");
+    });
+  });
+
+  it("uses the shared completion surface for the first prompt", async () => {
+    await withNewSessionPage(async (page) => {
+      const browserErrors: string[] = [];
+      page.on("console", (message) => {
+        if (message.type() === "error") {
+          browserErrors.push(message.text());
+        }
+      });
+      page.on("pageerror", (error) => browserErrors.push(error.message));
+      const commands = [
+        {
+          acceptsArgs: true,
+          description: "Draft polished prose.",
+          name: "prose",
+          scope: "both",
+          source: "skill",
+          skillModelVisible: true,
+          textAliases: ["/prose"],
+        },
+        {
+          acceptsArgs: false,
+          description: "Show gateway status.",
+          name: "status",
+          scope: "both",
+          source: "native",
+          textAliases: ["/status"],
+        },
+      ];
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "commands.list": { commands },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      const composer = page.locator(".new-session-page__message");
+      await composer.waitFor();
+
+      await composer.fill("/");
+      const slashPicker = page.getByRole("listbox", { name: "Slash commands" });
+      await slashPicker.waitFor({ state: "visible" });
+      await expect.poll(() => gateway.getRequests("commands.list")).toHaveLength(1);
+      await expect
+        .poll(() => slashPicker.getByRole("option", { name: /\/status/u }).count())
+        .toBe(1);
+      await expect
+        .poll(() => slashPicker.getByRole("option", { name: /\/clear/u }).count())
+        .toBe(0);
+      await expect.poll(() => slashPicker.getByRole("option", { name: /\/stop/u }).count()).toBe(0);
+
+      await composer.fill("Use $pro");
+      const skillPicker = page.getByRole("listbox", { name: "Skill references" });
+      await skillPicker.waitFor({ state: "visible" });
+      await expect.poll(() => skillPicker.getByRole("option").count()).toBe(1);
+      for (const viewport of [
+        { height: 844, name: "mobile", width: 390 },
+        { height: 1024, name: "tablet", width: 768 },
+        { height: 900, name: "desktop", width: 1440 },
+      ]) {
+        await page.setViewportSize({ height: viewport.height, width: viewport.width });
+        await expectComposerCompletionWithinViewport(page);
+        await captureUiProof(page, `new-session-shared-skill-completion-${viewport.name}.png`);
+      }
+      await composer.press("Enter");
+      await expect.poll(() => composer.inputValue()).toBe("Use $prose ");
+
+      await page.getByRole("button", { name: "Start session" }).click();
+      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
+        params: { message: "Use $prose" },
+      });
+      expect(browserErrors).toEqual([]);
     });
   });
 

@@ -23,7 +23,6 @@ import { prepareInitialUserMessageHandoff } from "../chat/initial-turn-handoff.t
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import * as catalog from "./catalog-target.ts";
 import { PendingCloudRecoveryState, type SubmissionOutcomeReason } from "./cloud-recovery-state.ts";
-import { NewSessionComposerTextareaController } from "./composer.ts";
 import {
   buildDraftSessionCreateParams as assembleDraftSessionCreateParams,
   canStartSessionAsDraft,
@@ -52,7 +51,6 @@ export class DraftSubmissionFlow {
   private submitRequestToken = 0;
   readonly pendingCloud = new PendingCloudRecoveryState();
   readonly attachmentDraft: NewSessionAttachmentDraft;
-  readonly composerTextarea = new NewSessionComposerTextareaController();
 
   constructor(
     private readonly gateway: DraftGatewayState,
@@ -670,7 +668,6 @@ export class DraftSubmissionFlow {
 
   disconnect() {
     this.attachmentDraft.reset({ release: true });
-    this.composerTextarea.disconnect();
   }
 
   private terminalStartAccess(): SessionMethodAccess {

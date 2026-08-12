@@ -63,6 +63,14 @@ export type ChatComposerDisabledBanner = ChatComposerDisabledBannerContent &
   ({ kind: "above-composer" } | { kind: "composer-replacement" });
 
 export type ChatComposerProps = ChatAttachmentControlsProps & {
+  /** Lightweight first-turn rendering omits controls that require an existing session. */
+  style?: "session" | "new-session";
+  shellClass?: string;
+  textareaClass?: string;
+  placeholder?: string;
+  primaryActions?: TemplateResult | typeof nothing;
+  statusContent?: TemplateResult | typeof nothing;
+  commandFilter?: (command: SlashCommandDef) => boolean;
   paneId: string;
   sessionKey: string;
   currentAgentId: string;
@@ -70,6 +78,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   offline?: boolean;
   queuedOutboxCount?: number;
   canSend: boolean;
+  canSubmit?: boolean;
   disabledReason: string | null;
   disabledBanner?: ChatComposerDisabledBanner;
   runError?: { summary: string } | null;
@@ -117,6 +126,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onTypingChange?: (typing: boolean) => void;
   composerControls?: TemplateResult | typeof nothing;
   onDraftChange: (next: string) => void;
+  onCompletionOwnerChange?: () => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
   onSend: (followUpModeOverride?: "steer") => void;
@@ -127,7 +137,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onDismissRealtimeTalkError?: () => void;
   onDictationError?: (message: string) => void;
   onAbort?: () => void;
-  onQueueRemove: (id: string) => void;
+  onQueueRemove?: (id: string) => void;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, toIndex: number) => void;

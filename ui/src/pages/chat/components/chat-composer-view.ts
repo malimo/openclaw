@@ -12,6 +12,7 @@ import {
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import {
+  createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
   renderAttachmentPreview,
   renderChatAttachmentInputs,
@@ -69,6 +70,7 @@ type ChatComposerViewContext = {
   slashMenuListboxId: string;
   slashMenuAnnouncementId: string;
   composerRunStatus: ComposerRunStatus | null | undefined;
+  attachmentDropHandlers: ReturnType<typeof createChatAttachmentDropHandlers> | null;
 };
 
 export function renderChatComposerView(context: ChatComposerViewContext) {
@@ -104,7 +106,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     slashMenuListboxId,
     slashMenuAnnouncementId,
     composerRunStatus,
+    attachmentDropHandlers,
   } = context;
+  const isSessionStyle = props.style !== "new-session";
   const disabledBanner = props.disabledBanner
     ? html`
         <div
@@ -149,26 +153,27 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   if (!props.capabilityMenu) {
     state.capabilityMenuView = "root";
   }
-  const overrideCount = countSessionToolOverrides(props.toolOverrides);
-  const overrideTooltip = sessionToolOverrideNames(
-    props.toolOverrides,
-    t("chat.composer.menu.webSearch"),
-  ).join(", ");
+  const overrideCount = isSessionStyle ? countSessionToolOverrides(props.toolOverrides) : 0;
+  const overrideTooltip = isSessionStyle
+    ? sessionToolOverrideNames(props.toolOverrides, t("chat.composer.menu.webSearch")).join(", ")
+    : "";
 
   return html`
-    ${renderChatQueue({
-      queue: props.queue,
-      canAbort: showAbortableUi,
-      onQueueRetry: props.connected && canCompose ? props.onQueueRetry : undefined,
-      onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
-      // Reordering is local bookkeeping, so it stays available while offline —
-      // exactly when a queue is long enough to need it.
-      onQueueMove: props.onQueueMove,
-      onQueueEdit: props.queuedEdit?.onEdit,
-      editingId: props.queuedEdit?.editingId ?? null,
-      onQueueRemove: props.onQueueRemove,
-    })}
-    ${props.runError
+    ${isSessionStyle
+      ? renderChatQueue({
+          queue: props.queue,
+          canAbort: showAbortableUi,
+          onQueueRetry: props.connected && canCompose ? props.onQueueRetry : undefined,
+          onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
+          // Reordering is local bookkeeping, so it stays available while offline —
+          // exactly when a queue is long enough to need it.
+          onQueueMove: props.onQueueMove,
+          onQueueEdit: props.queuedEdit?.onEdit,
+          editingId: props.queuedEdit?.editingId ?? null,
+          onQueueRemove: props.onQueueRemove ?? (() => undefined),
+        })
+      : nothing}
+    ${isSessionStyle && props.runError
       ? html`
           <div class="chat-run-error" role="alert">
             <span class="chat-run-error__icon" aria-hidden="true">${icons.alertTriangle}</span>
@@ -176,7 +181,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           </div>
         `
       : nothing}
-    ${showComposerInput && props.typingActors?.length
+    ${isSessionStyle && showComposerInput && props.typingActors?.length
       ? html`<div
           class="agent-chat__typing-indicator agent-chat__typing-indicator--outside"
           role="status"
@@ -199,8 +204,15 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           >
         </div>`
       : nothing}
-    <div class="agent-chat__composer-shell">
-      ${questionPanelProps
+    <div
+      class="agent-chat__composer-shell ${props.shellClass ?? ""}"
+      data-composer-style=${props.style ?? "session"}
+      @drop=${attachmentDropHandlers?.onDrop ?? nothing}
+      @dragenter=${attachmentDropHandlers?.onDragenter ?? nothing}
+      @dragleave=${attachmentDropHandlers?.onDragleave ?? nothing}
+      @dragover=${attachmentDropHandlers?.onDragover ?? nothing}
+    >
+      ${isSessionStyle && questionPanelProps
         ? html`
             <div class="agent-chat__question-dock">
               <openclaw-chat-question-panel
@@ -209,7 +221,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             </div>
           `
         : nothing}
-      ${disabledBanner}
+      ${isSessionStyle ? disabledBanner : nothing}
       ${showComposerInput
         ? html`<div
             class="agent-chat__input ${props.offline ? "agent-chat__input--offline" : ""}"
@@ -217,7 +229,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             @pointerdown=${(event: PointerEvent) => focusComposerFromChrome(event, canCompose)}
             ${ref(state.composerInputRef ?? undefined)}
           >
-            ${props.offline
+            ${isSessionStyle && props.offline
               ? html`<div class="agent-chat__offline-hint" role="status" aria-live="polite">
                   ${props.queuedOutboxCount
                     ? t("chat.composer.offlineQueuedHint", {
@@ -229,7 +241,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
             ${skillMenuVisible ? renderSkillMenu(requestUpdate, props) : nothing}
             ${renderAttachmentPreview(props)}
-            ${props.replyTarget
+            ${isSessionStyle && props.replyTarget
               ? html`
                   <div class="chat-reply-preview">
                     <span class="chat-reply-preview__icon">${icons.messageSquare}</span>
@@ -256,59 +268,62 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   </div>
                 `
               : nothing}
-            <div class="agent-chat__composer-status-stack">
-              ${dictation?.active
-                ? html`
-                    <div
-                      class=${`agent-chat__dictation-status${dictation.finalizing ? " agent-chat__dictation-status--finalizing" : ""}`}
-                      role="status"
-                      aria-live="polite"
-                      aria-atomic="true"
-                    >
-                      <span class="agent-chat__dictation-label"
-                        >${dictation.finalizing
-                          ? t("chat.composer.dictationFinalizing")
-                          : dictation.connecting
-                            ? t("chat.composer.dictationConnecting")
-                            : t("chat.composer.dictationRecording", {
-                                elapsed: dictation.elapsed,
-                              })}</span
-                      >
-                      ${dictation.partial
-                        ? html`<span class="agent-chat__dictation-partial"
-                            >${dictation.partial}</span
-                          >`
-                        : nothing}
-                    </div>
-                  `
-                : nothing}
-              ${renderChatPlanChecklist(props.planStatus, {
-                active: showAbortableUi,
-                variant: "bar",
-              })}
-              ${renderFallbackIndicator(props.fallbackStatus)}
-              ${renderCompactionIndicator(props.compactionStatus)}
-              ${renderChatGoal(state, activeSession?.goal, {
-                canAct: props.connected && canCompose,
-                onGoalCommand: props.onGoalCommand,
-                onGoalEdit: (goal) => {
-                  commitComposerDraft(props, `/goal edit ${goal.objective}`);
-                  requestUpdate();
-                  queueMicrotask(() => state.composerTextarea?.focus({ preventScroll: true }));
-                },
-                requestUpdate,
-              })}
-            </div>
-
+            ${isSessionStyle
+              ? html`<div class="agent-chat__composer-status-stack">
+                  ${dictation?.active
+                    ? html`
+                        <div
+                          class=${`agent-chat__dictation-status${dictation.finalizing ? " agent-chat__dictation-status--finalizing" : ""}`}
+                          role="status"
+                          aria-live="polite"
+                          aria-atomic="true"
+                        >
+                          <span class="agent-chat__dictation-label"
+                            >${dictation.finalizing
+                              ? t("chat.composer.dictationFinalizing")
+                              : dictation.connecting
+                                ? t("chat.composer.dictationConnecting")
+                                : t("chat.composer.dictationRecording", {
+                                    elapsed: dictation.elapsed,
+                                  })}</span
+                          >
+                          ${dictation.partial
+                            ? html`<span class="agent-chat__dictation-partial"
+                                >${dictation.partial}</span
+                              >`
+                            : nothing}
+                        </div>
+                      `
+                    : nothing}
+                  ${renderChatPlanChecklist(props.planStatus, {
+                    active: showAbortableUi,
+                    variant: "bar",
+                  })}
+                  ${renderFallbackIndicator(props.fallbackStatus)}
+                  ${renderCompactionIndicator(props.compactionStatus)}
+                  ${renderChatGoal(state, activeSession?.goal, {
+                    canAct: props.connected && canCompose,
+                    onGoalCommand: props.onGoalCommand,
+                    onGoalEdit: (goal) => {
+                      commitComposerDraft(props, `/goal edit ${goal.objective}`);
+                      requestUpdate();
+                      queueMicrotask(() => state.composerTextarea?.focus({ preventScroll: true }));
+                    },
+                    requestUpdate,
+                  })}
+                </div>`
+              : nothing}
             ${renderChatAttachmentInputs({ ...props, disabled: !canCompose })}
-            ${renderChatVoiceError({
-              status: props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus,
-              detail: props.realtimeTalkDetail,
-              onDismissError: props.realtimeTalkCameraError
-                ? undefined
-                : props.onDismissRealtimeTalkError,
-            })}
-            ${props.realtimeTalkVideoStream
+            ${isSessionStyle
+              ? renderChatVoiceError({
+                  status: props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus,
+                  detail: props.realtimeTalkDetail,
+                  onDismissError: props.realtimeTalkCameraError
+                    ? undefined
+                    : props.onDismissRealtimeTalkError,
+                })
+              : nothing}
+            ${isSessionStyle && props.realtimeTalkVideoStream
               ? html`
                   <div class="agent-chat__video-preview">
                     <video
@@ -346,7 +361,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   </div>
                 `
               : nothing}
-            ${props.disabledReason
+            ${isSessionStyle && props.disabledReason
               ? html`
                   <div class="agent-chat__disabled-reason">
                     <span>${props.disabledReason}</span>
@@ -355,47 +370,49 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               : nothing}
 
             <div class="agent-chat__composer-input-row">
-              ${renderChatComposerPlusMenu({
-                attachments: props,
-                showCapabilities: props.capabilityMenu !== undefined,
-                basePath: props.capabilityMenu?.basePath ?? "",
-                disabled: !canCompose || props.suggestionComposer === true,
-                open: state.capabilityMenuOpen,
-                view: state.capabilityMenuView,
-                toolOverrides: props.toolOverrides,
-                skills: props.capabilityMenu?.skills ?? null,
-                skillsLoading: props.capabilityMenu?.skillsLoading ?? false,
-                skillsError: props.capabilityMenu?.skillsError ?? false,
-                mcpServers: props.capabilityMenu?.mcpServers ?? [],
-                toolsEffectiveResult: props.capabilityMenu?.toolsEffectiveResult ?? null,
-                toolsEffectiveLoading: props.capabilityMenu?.toolsEffectiveLoading ?? false,
-                toolsEffectiveError: props.capabilityMenu?.toolsEffectiveError ?? false,
-                toolAccessMutationBlockedReason:
-                  props.capabilityMenu?.toolAccessMutationBlockedReason ?? null,
-                webSearchBaseEnabled: props.capabilityMenu?.webSearchBaseEnabled ?? true,
-                mutationBlockedReason: props.capabilityMenu?.mutationBlockedReason ?? null,
-                canAdmin: props.capabilityMenu?.canAdmin ?? false,
-                adminBlockedReason: props.capabilityMenu?.adminBlockedReason ?? null,
-                addServerDialog: props.capabilityMenu?.addServerDialog,
-                onOpenChange: (open) => {
-                  state.capabilityMenuOpen = open;
-                  if (!open) {
-                    state.capabilityMenuView = "root";
-                  }
-                  requestUpdate();
-                },
-                onViewChange: (view) => {
-                  state.capabilityMenuView = view;
-                  requestUpdate();
-                },
-                onLoadSkills: props.capabilityMenu?.onLoadSkills ?? (() => {}),
-                onPatchToolOverrides: props.capabilityMenu?.onPatchToolOverrides ?? (() => {}),
-                onNavigate: props.capabilityMenu?.onNavigate ?? (() => {}),
-                onAddServer: props.capabilityMenu?.onAddServer,
-                onEnsureToolAccess: props.capabilityMenu?.onEnsureToolAccess,
-                onOpenToolAccess: props.capabilityMenu?.onOpenToolAccess,
-              })}
-              ${props.queuedEdit?.editingId
+              ${isSessionStyle
+                ? renderChatComposerPlusMenu({
+                    attachments: props,
+                    showCapabilities: props.capabilityMenu !== undefined,
+                    basePath: props.capabilityMenu?.basePath ?? "",
+                    disabled: !canCompose || props.suggestionComposer === true,
+                    open: state.capabilityMenuOpen,
+                    view: state.capabilityMenuView,
+                    toolOverrides: props.toolOverrides,
+                    skills: props.capabilityMenu?.skills ?? null,
+                    skillsLoading: props.capabilityMenu?.skillsLoading ?? false,
+                    skillsError: props.capabilityMenu?.skillsError ?? false,
+                    mcpServers: props.capabilityMenu?.mcpServers ?? [],
+                    toolsEffectiveResult: props.capabilityMenu?.toolsEffectiveResult ?? null,
+                    toolsEffectiveLoading: props.capabilityMenu?.toolsEffectiveLoading ?? false,
+                    toolsEffectiveError: props.capabilityMenu?.toolsEffectiveError ?? false,
+                    toolAccessMutationBlockedReason:
+                      props.capabilityMenu?.toolAccessMutationBlockedReason ?? null,
+                    webSearchBaseEnabled: props.capabilityMenu?.webSearchBaseEnabled ?? true,
+                    mutationBlockedReason: props.capabilityMenu?.mutationBlockedReason ?? null,
+                    canAdmin: props.capabilityMenu?.canAdmin ?? false,
+                    adminBlockedReason: props.capabilityMenu?.adminBlockedReason ?? null,
+                    addServerDialog: props.capabilityMenu?.addServerDialog,
+                    onOpenChange: (open) => {
+                      state.capabilityMenuOpen = open;
+                      if (!open) {
+                        state.capabilityMenuView = "root";
+                      }
+                      requestUpdate();
+                    },
+                    onViewChange: (view) => {
+                      state.capabilityMenuView = view;
+                      requestUpdate();
+                    },
+                    onLoadSkills: props.capabilityMenu?.onLoadSkills ?? (() => {}),
+                    onPatchToolOverrides: props.capabilityMenu?.onPatchToolOverrides ?? (() => {}),
+                    onNavigate: props.capabilityMenu?.onNavigate ?? (() => {}),
+                    onAddServer: props.capabilityMenu?.onAddServer,
+                    onEnsureToolAccess: props.capabilityMenu?.onEnsureToolAccess,
+                    onOpenToolAccess: props.capabilityMenu?.onOpenToolAccess,
+                  })
+                : nothing}
+              ${isSessionStyle && props.queuedEdit?.editingId
                 ? html`
                     <span class="agent-chat__composer-edit" role="status">
                       <span class="agent-chat__composer-edit-icon" aria-hidden="true"
@@ -416,6 +433,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               <div class="agent-chat__composer-combobox">
                 <textarea
                   ${ref(state.textareaRef ?? undefined)}
+                  class=${ifDefined(props.textareaClass)}
                   .value=${visibleDraft}
                   dir=${detectTextDirection(visibleDraft)}
                   ?disabled=${!canCompose}
@@ -461,16 +479,18 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   aria-atomic="true"
                   >${activeSlashMenuOptionLabel}</span
                 >
-                <span
-                  class="agent-chat__run-status-announcement sr-only"
-                  role="status"
-                  aria-live="polite"
-                  aria-atomic="true"
-                  >${runStatusAnnouncement}</span
-                >
+                ${isSessionStyle
+                  ? html`<span
+                      class="agent-chat__run-status-announcement sr-only"
+                      role="status"
+                      aria-live="polite"
+                      aria-atomic="true"
+                      >${runStatusAnnouncement}</span
+                    >`
+                  : nothing}
               </div>
               <div class="agent-chat__composer-actions">
-                ${renderChatPrimaryActions(runControlsProps)}
+                ${props.primaryActions ?? renderChatPrimaryActions(runControlsProps)}
               </div>
             </div>
 
@@ -478,14 +498,14 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               ${composerControls !== nothing
                 ? html`
                     <div class="agent-chat__composer-controls">
-                      ${composerRunStatus?.phase === "interrupted"
+                      ${isSessionStyle && composerRunStatus?.phase === "interrupted"
                         ? html`
                             <div class="agent-chat__composer-run-status">
                               ${renderChatRunStatusIndicator(composerRunStatus)}
                             </div>
                           `
                         : nothing}
-                      ${overrideCount > 0 && props.capabilityMenu
+                      ${isSessionStyle && overrideCount > 0 && props.capabilityMenu
                         ? html`
                             <openclaw-tooltip .content=${overrideTooltip}>
                               <span class="agent-chat__session-overrides-pill">
@@ -528,8 +548,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     </div>
                   `
                 : nothing}
-              <div class="agent-chat__composer-meta">${contextNotice}</div>
+              ${isSessionStyle
+                ? html`<div class="agent-chat__composer-meta">${contextNotice}</div>`
+                : nothing}
             </div>
+            ${props.statusContent ?? nothing}
           </div>`
         : nothing}
     </div>
