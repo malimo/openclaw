@@ -1078,10 +1078,11 @@ describe("openclaw.chat", () => {
     );
   });
 
-  it("does not evict a QR runner after its presentation owner settles", async () => {
+  it("does not evict a terminal QR result while audit and polling finish", async () => {
     const ownerSettled = createDeferred();
-    const runnerReachedApply = createDeferred();
-    const releaseApply = createDeferred();
+    const runnerFinished = createDeferred();
+    const auditStarted = createDeferred();
+    const releaseAudit = createDeferred();
     const qrEngine = new SystemAgentChatEngine(
       {
         verifiedInference: requireVerifiedInferenceFixture(),
@@ -1097,16 +1098,22 @@ describe("openclaw.chat", () => {
               text: "https://example.test/pair",
               dismissed: ownerSettled.promise,
             });
-            runnerReachedApply.resolve();
-            await releaseApply.promise;
+            runnerFinished.resolve();
+          },
+          appendAuditEntry: async () => {
+            auditStarted.resolve();
+            await releaseAudit.promise;
+            return "audit-entry";
           },
         },
       },
     );
     const prompt = await qrEngine.handle("connect telegram");
     expect(prompt.step?.type).toBe("qr");
+    const stepId = expectDefined(prompt.step?.id, "QR step id");
     ownerSettled.resolve();
-    await runnerReachedApply.promise;
+    await runnerFinished.promise;
+    await waitOneTask();
     expect(qrEngine.hasPendingQrCode()).toBe(true);
 
     const qrSession = seededSession({ engine: qrEngine, lastUsedAt: 0 });
@@ -1117,14 +1124,25 @@ describe("openclaw.chat", () => {
     }
     stubEngineOverview();
 
+    await expect(qrEngine.pollStep(stepId)).resolves.toMatchObject({ wizardSettling: true });
+    await auditStarted.promise;
     const admission = callChat(makeContext(sessions), { sessionId: "new-session" });
     await waitOneTask();
 
     expect(disposeQr).not.toHaveBeenCalled();
-    releaseApply.resolve();
     expect(await admission).toMatchObject({ ok: true });
     expect(sessions.has("qr-applying")).toBe(true);
     expect(sessions.has("ordinary-1")).toBe(false);
+
+    releaseAudit.resolve();
+    let completed: Awaited<ReturnType<SystemAgentChatEngine["pollStep"]>> | undefined;
+    await vi.waitFor(async () => {
+      const reply = await qrEngine.pollStep(stepId);
+      expect(reply.wizardSettling).not.toBe(true);
+      completed = reply;
+    });
+    expect(completed?.text).toContain("telegram is configured");
+    expect(qrEngine.hasPendingQrCode()).toBe(false);
   });
 
   it("resets a session on request", async () => {

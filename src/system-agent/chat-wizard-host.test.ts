@@ -2,6 +2,7 @@ import "./chat-engine.mocks.test-support.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fakeOverviewLoader,
+  mocks,
   classifySystemAgentApprovalText,
   useTempStateDir,
   configSnapshot,
@@ -15,13 +16,12 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "./chat-engine.test-support.js";
+import type { ChatWizardHostDependencies } from "./chat-wizard-host.js";
 
 const QR_TEXT = "https://example.test/pair";
 
 function createQrEngine(
-  runChannelSetupWizard: NonNullable<
-    ConstructorParameters<typeof SystemAgentChatEngine>[0]["runChannelSetupWizard"]
-  >,
+  runChannelSetupWizard: NonNullable<ChatWizardHostDependencies["runChannelSetupWizard"]>,
 ) {
   return new SystemAgentChatEngine({
     runAgentTurn: async () => null,
@@ -29,6 +29,7 @@ function createQrEngine(
     deps: { loadOverview: fakeOverviewLoader() },
     supportsQrCode: true,
     runChannelSetupWizard,
+    appendAuditEntry: async () => "",
   });
 }
 
@@ -74,10 +75,10 @@ describe("SystemAgentChatEngine wizard", () => {
       "QR setup continues automatically",
     );
     settleOwner();
-    await vi.waitFor(() => expect(engine.hasPendingQrCode()).toBe(false));
     const done = await engine.handle("status");
     expect(done.text).toContain("telegram is configured");
     expect(done.step).toBeUndefined();
+    expect(engine.hasPendingQrCode()).toBe(false);
   });
 
   it("polls owner completion without answering the QR step", async () => {
@@ -111,11 +112,70 @@ describe("SystemAgentChatEngine wizard", () => {
     expect(settling).not.toHaveProperty("step");
 
     releaseRunner();
-    await vi.waitFor(() => expect(engine.hasPendingQrCode()).toBe(false));
-    const completed = await engine.pollStep(stepId);
-    expect(completed.text).toContain("telegram is configured");
-    expect(completed).not.toHaveProperty("wizardSettling");
-    expect(completed).not.toHaveProperty("step");
+    expect(engine.hasPendingQrCode()).toBe(true);
+    let completed: Awaited<ReturnType<SystemAgentChatEngine["pollStep"]>> | undefined;
+    await vi.waitFor(async () => {
+      const reply = await engine.pollStep(stepId);
+      expect(reply.wizardSettling).not.toBe(true);
+      completed = reply;
+    });
+    const terminal = expectDefined(completed, "terminal QR reply");
+    expect(terminal.text).toContain("telegram is configured");
+    expect(terminal).not.toHaveProperty("wizardSettling");
+    expect(terminal).not.toHaveProperty("step");
+    expect(engine.hasPendingQrCode()).toBe(false);
+  });
+
+  it("verifies a passive QR write once before retaining its terminal reply", async () => {
+    let settleOwner!: () => void;
+    const owner = new Promise<void>((resolve) => {
+      settleOwner = resolve;
+    });
+    let releaseRunner!: () => void;
+    const runnerGate = new Promise<void>((resolve) => {
+      releaseRunner = resolve;
+    });
+    let runnerReachedGate = false;
+    const engine = createQrEngine(async (_channel, prompter) => {
+      await prompter.qrCode?.({
+        title: "Link a device",
+        message: "Scan this QR code and approve the device.",
+        text: QR_TEXT,
+        dismissed: owner,
+      });
+      runnerReachedGate = true;
+      await runnerGate;
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    const stepId = expectDefined(prompt.step, "QR step").id;
+    settleOwner();
+    await vi.waitFor(() => expect(runnerReachedGate).toBe(true));
+    await expect(engine.pollStep(stepId)).resolves.toMatchObject({ wizardSettling: true });
+
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      path: "/tmp/openclaw.json",
+      hash: "invalid",
+      config: {},
+      sourceConfig: {},
+      issues: [{ path: "channels.signal", message: "invalid transport" }],
+    } as never);
+    releaseRunner();
+    let completed: Awaited<ReturnType<SystemAgentChatEngine["pollStep"]>> | undefined;
+    await vi.waitFor(async () => {
+      const reply = await engine.pollStep(stepId);
+      expect(reply.wizardSettling).not.toBe(true);
+      completed = reply;
+    });
+
+    const terminal = expectDefined(completed, "verified terminal QR reply");
+    expect(terminal.text).toContain("telegram is configured");
+    expect(terminal.text).toContain("openclaw.json failed validation");
+    expect(terminal.text).toContain("openclaw doctor --fix");
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledOnce();
+    expect(engine.hasPendingQrCode()).toBe(false);
   });
 
   it.each([
@@ -238,7 +298,12 @@ describe("SystemAgentChatEngine wizard", () => {
     );
 
     releaseRunner();
-    await vi.waitFor(() => expect(engine.hasPendingQrCode()).toBe(false));
+    expect(engine.hasPendingQrCode()).toBe(true);
+    await vi.waitFor(async () => {
+      const reply = await engine.pollStep(stepId);
+      expect(reply.wizardSettling).not.toBe(true);
+    });
+    expect(engine.hasPendingQrCode()).toBe(false);
   });
 
   it("keeps typed cancellation reachable after the QR owner settles", async () => {
@@ -316,11 +381,11 @@ describe("SystemAgentChatEngine wizard", () => {
     const prompt = await engine.handle("connect telegram");
     expectDefined(prompt.step, "QR step");
     settleOwner();
-    await vi.waitFor(() => expect(engine.hasPendingQrCode()).toBe(false));
 
     const completed = await engine.handle("status");
     expect(completed.text).toContain("telegram is configured");
     expect(completed.step).toBeUndefined();
+    expect(engine.hasPendingQrCode()).toBe(false);
   });
 
   it("waits for an owner-settled QR runner before disposal completes", async () => {

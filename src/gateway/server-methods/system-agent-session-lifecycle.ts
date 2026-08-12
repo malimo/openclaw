@@ -1,11 +1,21 @@
+import {
+  createAdmittedWizardSession,
+  whenAdmittedWizardSessionSettled,
+} from "./setup-admission.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type SystemAgentSessions = GatewayRequestContext["systemAgentSessions"];
 type WizardSessions = GatewayRequestContext["wizardSessions"];
+type GatewayWizardSession = WizardSessions extends Map<string, infer Session> ? Session : never;
 type ApprovalManager = NonNullable<GatewayRequestContext["systemAgentApprovalManager"]>;
 
 const retiredStores = new WeakSet<SystemAgentSessions>();
 const pendingDisposals = new WeakMap<SystemAgentSessions, Set<Promise<void>>>();
+const retiredWizardStores = new WeakSet<WizardSessions>();
+const pendingWizardAdmissions = new WeakMap<
+  WizardSessions,
+  Set<Promise<GatewayWizardSession | undefined>>
+>();
 
 export function assertSystemAgentSessionStoreActive(sessions: SystemAgentSessions): void {
   if (retiredStores.has(sessions)) {
@@ -22,6 +32,46 @@ function trackDisposal(sessions: SystemAgentSessions, disposal: Promise<void>): 
   pending.add(disposal);
   void disposal.finally(() => pending?.delete(disposal)).catch(() => undefined);
   return disposal;
+}
+
+function trackWizardAdmission(
+  sessions: WizardSessions,
+  admission: Promise<GatewayWizardSession | undefined>,
+): Promise<GatewayWizardSession | undefined> {
+  let pending = pendingWizardAdmissions.get(sessions);
+  if (!pending) {
+    pending = new Set();
+    pendingWizardAdmissions.set(sessions, pending);
+  }
+  pending.add(admission);
+  void admission.finally(() => pending?.delete(admission)).catch(() => undefined);
+  return admission;
+}
+
+/** Admits and registers a runner atomically with respect to Gateway retirement. */
+export function admitWizard(
+  sessions: WizardSessions,
+  sessionId: string,
+  createSession: () => GatewayWizardSession,
+  lockSetupTarget?: boolean,
+): Promise<GatewayWizardSession | undefined> {
+  if (retiredWizardStores.has(sessions)) {
+    return Promise.resolve(undefined);
+  }
+  const admission = (async () => {
+    const session = await createAdmittedWizardSession(createSession, lockSetupTarget);
+    if (!session) {
+      return undefined;
+    }
+    if (retiredWizardStores.has(sessions)) {
+      session.cancel();
+      await whenAdmittedWizardSessionSettled(session);
+      return undefined;
+    }
+    sessions.set(sessionId, session);
+    return session;
+  })();
+  return trackWizardAdmission(sessions, admission);
 }
 
 function expireSessionApproval(
@@ -65,7 +115,11 @@ export function retireAndDisposeSystemAgentSessions(params: {
   approvalManager?: ApprovalManager;
 }): Promise<void> {
   retiredStores.add(params.sessions);
-  const disposals: Promise<void>[] = [...(pendingDisposals.get(params.sessions) ?? [])];
+  retiredWizardStores.add(params.wizardSessions);
+  const disposals: Promise<unknown>[] = [
+    ...(pendingDisposals.get(params.sessions) ?? []),
+    ...(pendingWizardAdmissions.get(params.wizardSessions) ?? []),
+  ];
   for (const [sessionId, session] of params.sessions) {
     params.sessions.delete(sessionId);
     expireSessionApproval(session, params.approvalManager, "gateway-shutdown");

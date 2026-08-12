@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { WizardSession } from "../../wizard/session.js";
 import {
   assertSystemAgentSessionStoreActive,
+  admitWizard,
   disposeSystemAgentSessionsForOwner,
   retireAndDisposeSystemAgentSessions,
 } from "./system-agent-session-lifecycle.js";
@@ -19,7 +21,7 @@ function session(ownerKey: string, dispose: () => Promise<void>): Session {
 
 describe("system-agent session lifecycle", () => {
   it("removes one connection owner synchronously and joins its disposal", async () => {
-    const release = createDeferred<void>();
+    const release = createDeferred();
     const sessions = new Map([
       ["connection-session", session("connection:one", async () => await release.promise)],
       ["device-session", session("device:two", async () => undefined)],
@@ -57,5 +59,44 @@ describe("system-agent session lifecycle", () => {
     expect(wizardSessions.size).toBe(0);
     expect(dispose).toHaveBeenCalledOnce();
     expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("joins an admitted wizard that reaches registration during shutdown", async () => {
+    const runnerSettled = createDeferred();
+    const cancel = vi.fn(() => true);
+    const sessions = new Map() as Sessions;
+    const wizardSessions = new Map() as GatewayRequestContext["wizardSessions"];
+    const createSession = vi.fn(
+      () =>
+        ({
+          cancel,
+          whenSettled: () => runnerSettled.promise,
+        }) as unknown as WizardSession,
+    );
+
+    const admission = admitWizard(wizardSessions, "late-wizard", createSession, false);
+    let retirementResolved = false;
+    const retirement = retireAndDisposeSystemAgentSessions({ sessions, wizardSessions }).then(
+      () => {
+        retirementResolved = true;
+      },
+    );
+
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(retirementResolved).toBe(false);
+    expect(wizardSessions.size).toBe(0);
+
+    runnerSettled.resolve();
+    await expect(admission).resolves.toBeUndefined();
+    await retirement;
+    expect(retirementResolved).toBe(true);
+
+    const postRetirementFactory = vi.fn<() => WizardSession>(() => {
+      throw new Error("retired wizard factory must not run");
+    });
+    await expect(
+      admitWizard(wizardSessions, "after-retirement", postRetirementFactory, false),
+    ).resolves.toBeUndefined();
+    expect(postRetirementFactory).not.toHaveBeenCalled();
   });
 });

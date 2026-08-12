@@ -132,9 +132,9 @@ export class ChatWizardHost {
     return this.bridge?.step?.sensitive === true;
   }
 
-  /** A QR-owning wizard stays protected until its runner can no longer mutate setup state. */
+  /** A QR-owning wizard stays protected until its terminal result is collected. */
   hasPendingQrCode(): boolean {
-    return this.bridge?.passiveQrStepId !== undefined && !this.bridge.session.isSettled();
+    return this.bridge?.passiveQrStepId !== undefined;
   }
 
   whenSettled(): Promise<void> | null {

@@ -75,6 +75,7 @@ export class SystemAgentChatEngine {
   private disposal: Promise<void> | null = null;
   private persistentApplySettlement: Promise<void> | null = null;
   private retainedPollReplies = new Map<string, SystemAgentChatReply>();
+  private passivePollsInFlight = 0;
 
   constructor(
     private readonly options: SystemAgentChatEngineOptions,
@@ -122,7 +123,11 @@ export class SystemAgentChatEngine {
   }
 
   hasPendingQrCode(): boolean {
-    return this.wizard.hasPendingQrCode();
+    return (
+      this.wizard.hasPendingQrCode() ||
+      this.passivePollsInFlight > 0 ||
+      this.retainedPollReplies.size > 0
+    );
   }
 
   getPersistentApplySettlement(): Promise<void> | null {
@@ -215,30 +220,35 @@ export class SystemAgentChatEngine {
       }
       return { ...retained };
     }
-    const observation = this.turnQueue.then(async () => {
-      this.assertActive();
-      const queuedRetained = this.retainedPollReplies.get(stepId);
-      if (queuedRetained) {
-        return { ...queuedRetained };
-      }
-      const result = await this.wizard.pollStep(stepId);
-      this.assertActive();
-      const reply = this.wizard.decorateReply({ text: result.text, action: "none" });
-      if (
-        reply.step === undefined &&
-        reply.wizardInputPending !== true &&
-        reply.wizardSettling !== true
-      ) {
-        this.retainedPollReplies.set(stepId, { ...reply });
-      }
-      return reply;
-    });
+    this.passivePollsInFlight += 1;
+    const observation = this.turnQueue
+      .then(async () => {
+        this.assertActive();
+        const queuedRetained = this.retainedPollReplies.get(stepId);
+        if (queuedRetained) {
+          return { ...queuedRetained };
+        }
+        const result = await this.router.finalizeWizardResult(await this.wizard.pollStep(stepId));
+        this.assertActive();
+        const reply = this.wizard.decorateReply({ text: result.text, action: "none" });
+        if (
+          reply.step === undefined &&
+          reply.wizardInputPending !== true &&
+          reply.wizardSettling !== true
+        ) {
+          this.retainedPollReplies.set(stepId, { ...reply });
+        }
+        return reply;
+      })
+      .finally(() => {
+        this.passivePollsInFlight -= 1;
+      });
     this.turnQueue = observation.catch(() => undefined);
     let cancelTimer: (() => void) | undefined;
     const outcome = await Promise.race([
       observation.then((reply) => ({ reply })),
       new Promise<undefined>((resolve) => {
-        const timer = setTimeout(resolve, 0);
+        const timer = setTimeout(() => resolve(undefined), 0);
         cancelTimer = () => clearTimeout(timer);
       }),
     ]);
