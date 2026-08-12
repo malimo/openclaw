@@ -58,6 +58,7 @@ export type SystemAgentChatEngineOptions = {
 
 type RetainedPollReply = {
   expiresAtMs: number;
+  terminalHistoryRecorded: boolean;
   reply: SystemAgentChatReply;
 };
 
@@ -87,8 +88,8 @@ export class SystemAgentChatEngine {
   private disposed = false;
   private disposal: Promise<void> | null = null;
   private persistentApplySettlement: Promise<void> | null = null;
-  // Passive QR retries share one queued observation; retained replies remain
-  // transport aliases until the wizard advances or their recovery lease expires.
+  // Passive QR retries share one queued observation. Follow-ups remain until
+  // the wizard advances; terminal replies remain for the recovery lease.
   private retainedPollReplies = new Map<string, RetainedPollReply>();
   private passivePollObservations = new Map<string, Promise<SystemAgentChatReply>>();
 
@@ -257,11 +258,9 @@ export class SystemAgentChatEngine {
               expiresAtMs:
                 result.passiveQrRetentionExpiresAtMs ??
                 Date.now() + SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS,
+              terminalHistoryRecorded: false,
               reply: { ...reply },
             });
-            if (reply.text && isTerminalPollReply(reply) && !this.wizard.hasPendingQrCode()) {
-              this.history.push({ role: "assistant", text: reply.text });
-            }
           }
           return reply;
         });
@@ -280,8 +279,9 @@ export class SystemAgentChatEngine {
     ]);
     cancelTimer?.();
     if (outcome) {
-      if (isTerminalPollReply(outcome.reply)) {
-        this.retainedPollReplies.delete(stepId);
+      const retained = this.retainedPollReplies.get(stepId);
+      if (retained) {
+        return this.recordObservedPollReply(retained);
       }
       return outcome.reply;
     }
@@ -290,6 +290,18 @@ export class SystemAgentChatEngine {
       action: "none",
       wizardSettling: true,
     };
+  }
+
+  private recordObservedPollReply(retained: RetainedPollReply): SystemAgentChatReply {
+    if (isTerminalPollReply(retained.reply) && !retained.terminalHistoryRecorded) {
+      // Only the request that observes completion may make it durable. The
+      // background observer can finish after its Gateway request has returned.
+      retained.terminalHistoryRecorded = true;
+      if (retained.reply.text) {
+        this.history.push({ role: "assistant", text: retained.reply.text });
+      }
+    }
+    return { ...retained.reply };
   }
 
   private pruneExpiredPollReplies(nowMs = Date.now()): void {

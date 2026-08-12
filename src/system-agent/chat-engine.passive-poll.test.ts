@@ -12,7 +12,6 @@ const QR_TEXT = "https://example.test/pair";
 
 function createQrEngine(
   runChannelSetupWizard: NonNullable<ChatWizardHostDependencies["runChannelSetupWizard"]>,
-  appendAuditEntry?: ChatWizardHostDependencies["appendAuditEntry"],
 ) {
   return new SystemAgentChatEngine({
     runAgentTurn: async () => null,
@@ -20,7 +19,6 @@ function createQrEngine(
     deps: { loadOverview: fakeOverviewLoader() },
     supportsQrCode: true,
     runChannelSetupWizard,
-    ...(appendAuditEntry ? { appendAuditEntry } : {}),
   });
 }
 
@@ -123,45 +121,23 @@ describe("SystemAgentChatEngine passive QR polling", () => {
     }
   });
 
-  it("records one terminal history entry for concurrent poll subscribers", async () => {
+  it("replays a dropped terminal reply while recording its history once", async () => {
     const owner = createDeferred();
     const runnerFinished = createDeferred();
-    const auditStarted = createDeferred();
-    const releaseAudit = createDeferred();
-    let auditInFlight = false;
-    const engine = createQrEngine(
-      async (_channel, prompter) => {
-        await prompter.qrCode?.({
-          title: "Link a device",
-          message: "Scan this QR code and approve the device.",
-          text: QR_TEXT,
-          dismissed: owner.promise,
-        });
-        runnerFinished.resolve();
-      },
-      async () => {
-        auditInFlight = true;
-        auditStarted.resolve();
-        await releaseAudit.promise;
-        return "";
-      },
-    );
+    const engine = createQrEngine(async (_channel, prompter) => {
+      await prompter.qrCode?.({
+        title: "Link a device",
+        message: "Scan this QR code and approve the device.",
+        text: QR_TEXT,
+        dismissed: owner.promise,
+      });
+      runnerFinished.resolve();
+    });
 
     const prompt = await engine.handle("connect telegram");
     const stepId = expectDefined(prompt.step, "QR step").id;
     owner.resolve();
     await runnerFinished.promise;
-    await vi.waitFor(async () => {
-      const reply = await engine.pollStep(stepId);
-      expect(auditInFlight).toBe(true);
-      expect(reply).toMatchObject({ wizardSettling: true });
-    });
-    await auditStarted.promise;
-    const subscribers = Array.from({ length: 16 }, () => engine.pollStep(stepId));
-    await expect(Promise.all(subscribers)).resolves.toEqual(
-      Array.from({ length: 16 }, () => expect.objectContaining({ wizardSettling: true })),
-    );
-    releaseAudit.resolve();
 
     let terminal: Awaited<ReturnType<SystemAgentChatEngine["pollStep"]>> | undefined;
     await vi.waitFor(async () => {
@@ -169,6 +145,12 @@ describe("SystemAgentChatEngine passive QR polling", () => {
       expect(terminal.wizardSettling).not.toBe(true);
     });
     const completed = expectDefined(terminal, "terminal reply");
+    expect(
+      engine
+        .historySince(0)
+        .filter((turn) => turn.role === "assistant" && turn.text === completed.text),
+    ).toHaveLength(1);
+    await expect(engine.pollStep(stepId)).resolves.toEqual(completed);
     expect(
       engine
         .historySince(0)

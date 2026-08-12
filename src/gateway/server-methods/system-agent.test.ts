@@ -748,6 +748,75 @@ describe("openclaw.chat", () => {
     );
   });
 
+  it("persists a delayed terminal QR reply once and replays it after dropped delivery", async () => {
+    const ownerSettled = createDeferred();
+    const runnerFinished = createDeferred();
+    const auditStarted = createDeferred();
+    const releaseAudit = createDeferred();
+    const auditFinished = createDeferred();
+    const engine = new SystemAgentChatEngine(
+      {
+        verifiedInference: requireVerifiedInferenceFixture(),
+        deps: requireVerifiedInferenceDeps(),
+        supportsQrCode: true,
+      },
+      {
+        wizardDependencies: {
+          runChannelSetupWizard: async (_channel, prompter) => {
+            await prompter.qrCode?.({
+              title: "Link a device",
+              message: "Scan this QR code.",
+              text: "https://example.test/pair",
+              dismissed: ownerSettled.promise,
+            });
+            runnerFinished.resolve();
+          },
+          appendAuditEntry: async () => {
+            auditStarted.resolve();
+            await releaseAudit.promise;
+            auditFinished.resolve();
+            return "audit-entry";
+          },
+        },
+      },
+    );
+    const prompt = await engine.handle("connect telegram");
+    const stepId = expectDefined(prompt.step?.id, "QR step id");
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+    const context = makeContext(sessions);
+
+    ownerSettled.resolve();
+    await runnerFinished.promise;
+    const settling = await callChat(context, { sessionId: "s1", pollStepId: stepId });
+    expect(settling.payload).toMatchObject({ wizardSettling: true });
+    await auditStarted.promise;
+    expect(transcriptStoreMocks.appendTranscriptTurn).not.toHaveBeenCalled();
+
+    releaseAudit.resolve();
+    await auditFinished.promise;
+    await engine.resolveOperatorApproval(null, "queue-drain");
+    await systemAgentHandler("openclaw.chat")({
+      params: { sessionId: "s1", pollStepId: stepId },
+      respond: () => undefined,
+      context,
+      client: defaultClient,
+    } as never);
+
+    const persistedTerminal = transcriptStoreMocks.appendTranscriptTurn.mock.calls.filter(
+      ([turn]) => turn.role === "assistant" && turn.text.includes("is configured"),
+    );
+    expect(persistedTerminal).toHaveLength(1);
+    const terminalText = expectDefined(persistedTerminal[0]?.[0].text, "terminal transcript text");
+
+    const retry = await callChat(context, { sessionId: "s1", pollStepId: stepId });
+    expect(retry.payload).toMatchObject({ reply: terminalText });
+    expect(
+      transcriptStoreMocks.appendTranscriptTurn.mock.calls.filter(
+        ([turn]) => turn.role === "assistant" && turn.text === terminalText,
+      ),
+    ).toHaveLength(1);
+  });
+
   it("seeds a new engine with the persisted tail before recording its welcome", async () => {
     stubEngineOverview();
     transcriptStoreMocks.readTranscriptTail.mockReturnValue([
