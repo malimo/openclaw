@@ -17,6 +17,7 @@ import {
   type WizardPrompter,
 } from "./chat-engine.test-support.js";
 import type { ChatWizardHostDependencies } from "./chat-wizard-host.js";
+import { SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS } from "./chat-wizard-host.js";
 
 const QR_TEXT = "https://example.test/pair";
 
@@ -75,6 +76,15 @@ describe("SystemAgentChatEngine wizard", () => {
       "QR setup continues automatically",
     );
     settleOwner();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    const retainedAt = Date.now();
+    const now = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(retainedAt + SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS + 1);
+    expect(engine.hasPendingQrCode()).toBe(false);
+    now.mockRestore();
     const done = await engine.handle("status");
     expect(done.text).toContain("telegram is configured");
     expect(done.step).toBeUndefined();

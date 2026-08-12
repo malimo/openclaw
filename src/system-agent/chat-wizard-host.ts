@@ -45,6 +45,7 @@ export type SystemAgentChatReply = {
 export type ChatWizardResult = {
   text: string;
   configWritten: boolean;
+  passiveQrRetentionExpiresAtMs?: number;
   sensitiveChannel?: string;
 };
 
@@ -87,6 +88,7 @@ type ActiveWizardBridge = {
   qrExpiresAtMs: number | undefined;
   qrStepId: string | undefined;
   passiveQrStepId: string | undefined;
+  passiveQrRetentionExpiresAtMs: number | undefined;
   qrExpired: boolean;
   kind: "channel" | "skills" | "search" | "gateway" | "memory-import";
   label: string;
@@ -132,8 +134,9 @@ export class ChatWizardHost {
     return this.bridge?.step?.sensitive === true;
   }
 
-  /** A QR-owning wizard stays protected until its terminal result is collected. */
+  /** A QR-owning wizard stays protected until collection or its recovery lease expires. */
   hasPendingQrCode(): boolean {
+    this.pruneExpiredPassiveQrRetention();
     return this.bridge?.passiveQrStepId !== undefined;
   }
 
@@ -237,6 +240,7 @@ export class ChatWizardHost {
   /** Observe a QR-owned step without answering the dependency-owned prompt. */
   async pollStep(stepId: string): Promise<ChatWizardResult> {
     this.expireActiveQrIfNeeded();
+    this.pruneExpiredPassiveQrRetention();
     const bridge = this.bridge;
     if (!bridge) {
       throw new SystemAgentWizardAnswerError("The hosted wizard step is no longer active.");
@@ -247,7 +251,13 @@ export class ChatWizardHost {
     if (bridge.passiveQrStepId !== stepId) {
       throw new SystemAgentWizardAnswerError("The hosted wizard poll targets a stale step.");
     }
-    return this.renderPendingQrOwner(bridge) ?? (await this.pump());
+    const result = this.renderPendingQrOwner(bridge) ?? (await this.pump());
+    return bridge.passiveQrRetentionExpiresAtMs === undefined
+      ? result
+      : {
+          ...result,
+          passiveQrRetentionExpiresAtMs: bridge.passiveQrRetentionExpiresAtMs,
+        };
   }
 
   async resolveReply(text: string): Promise<ChatWizardResult | null> {
@@ -434,6 +444,7 @@ export class ChatWizardHost {
       qrExpiresAtMs: undefined,
       qrStepId: undefined,
       passiveQrStepId: undefined,
+      passiveQrRetentionExpiresAtMs: undefined,
       qrExpired: false,
       kind: params.kind,
       label: params.label,
@@ -486,6 +497,7 @@ export class ChatWizardHost {
         : "cancellation";
     bridge.qrStepId = bridge.step?.id;
     bridge.passiveQrStepId = bridge.step?.id;
+    bridge.passiveQrRetentionExpiresAtMs = undefined;
     const expiresAtMs = bridge.qrExpiresAtMs;
     bridge.expiryTimer = setTimeout(
       () => this.expireQr(bridge, expiresAtMs),
@@ -523,10 +535,22 @@ export class ChatWizardHost {
     );
     bridge.expiryTimer.unref?.();
     void bridge.session.whenSettled().then(() => {
-      if (this.bridge === bridge && bridge.qrExpiresAtMs === expiresAtMs) {
+      if (this.bridge === bridge && bridge.passiveQrStepId === stepId) {
         this.clearExpiry(bridge);
+        bridge.passiveQrRetentionExpiresAtMs = Date.now() + SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS;
       }
     });
+  }
+
+  private pruneExpiredPassiveQrRetention(nowMs = Date.now()): void {
+    const bridge = this.bridge;
+    if (
+      bridge?.passiveQrRetentionExpiresAtMs !== undefined &&
+      bridge.passiveQrRetentionExpiresAtMs <= nowMs
+    ) {
+      bridge.passiveQrStepId = undefined;
+      bridge.passiveQrRetentionExpiresAtMs = undefined;
+    }
   }
 
   private expireQr(bridge: ActiveWizardBridge, expectedExpiresAtMs = bridge.qrExpiresAtMs): void {

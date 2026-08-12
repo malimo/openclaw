@@ -246,7 +246,9 @@ export class SystemAgentChatEngine {
           reply.wizardSettling !== true
         ) {
           this.retainedPollReplies.set(stepId, {
-            expiresAtMs: Date.now() + SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS,
+            expiresAtMs:
+              result.passiveQrRetentionExpiresAtMs ??
+              Date.now() + SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS,
             reply: { ...reply },
           });
         }
