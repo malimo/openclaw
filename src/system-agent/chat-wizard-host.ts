@@ -568,6 +568,12 @@ export class ChatWizardHost {
       SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS,
     );
     bridge.expiryTimer.unref?.();
+    this.retainPassiveQrAfterSettlement(bridge, stepId);
+  }
+
+  private retainPassiveQrAfterSettlement(bridge: ActiveWizardBridge, stepId: string): void {
+    // The runner can still apply state after its displayed QR is gone. Start the bounded
+    // recovery lease only once settlement makes owner eviction safe.
     void bridge.session.whenSettled().then(() => {
       if (this.bridge === bridge && bridge.passiveQrStepId === stepId) {
         this.clearExpiry(bridge);
@@ -605,6 +611,10 @@ export class ChatWizardHost {
       bridge.step = null;
       this.armRunnerExpiry(bridge, stepId);
       return;
+    }
+    const stepId = bridge.step?.type === "qr" ? bridge.passiveQrStepId : undefined;
+    if (stepId !== undefined) {
+      this.retainPassiveQrAfterSettlement(bridge, stepId);
     }
     bridge.session.cancel();
     // Keep a scrubbed marker until the next queued turn observes expiry.

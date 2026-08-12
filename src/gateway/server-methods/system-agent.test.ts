@@ -1379,6 +1379,80 @@ describe("openclaw.chat", () => {
     );
   });
 
+  it("releases active QR capacity after an abandoned ownerless QR times out", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    const runnerFinished = createDeferred();
+    const qrEngine = new SystemAgentChatEngine(
+      {
+        verifiedInference: requireVerifiedInferenceFixture(),
+        deps: requireVerifiedInferenceDeps(),
+        supportsQrCode: true,
+      },
+      {
+        wizardDependencies: {
+          runChannelSetupWizard: async (_channel, prompter, _beforePersistentApply, signal) => {
+            const owner = new Promise<void>((_resolve, reject) => {
+              signal.addEventListener(
+                "abort",
+                () => reject(new Error("QR owner aborted", { cause: signal.reason })),
+                { once: true },
+              );
+            });
+            try {
+              await prompter.qrCode?.({
+                title: "Link a device",
+                message: "Scan this QR code.",
+                text: "https://example.test/pair",
+                dismissed: owner,
+              });
+            } finally {
+              runnerFinished.resolve();
+            }
+          },
+        },
+      },
+    );
+
+    try {
+      await expect(qrEngine.handle("connect telegram")).resolves.toMatchObject({
+        step: { type: "qr" },
+      });
+      await vi.advanceTimersByTimeAsync(SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS);
+      await runnerFinished.promise;
+      await Promise.resolve();
+      expect(qrEngine.hasPendingQrCode()).toBe(true);
+      await vi.advanceTimersByTimeAsync(SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS + 1);
+      expect(qrEngine.hasPendingQrCode()).toBe(false);
+
+      const timedOutSession = seededSession({
+        engine: qrEngine,
+        lastUsedAt: 0,
+        ownerKey: "device:timed-out-owner",
+      });
+      const disposeTimedOut = vi.spyOn(qrEngine, "dispose");
+      const sessions = new Map<string, SystemAgentChatSession>([["timed-out", timedOutSession]]);
+      for (let index = 1; index < 8; index += 1) {
+        const protectedSession = seededSession({
+          lastUsedAt: index,
+          ownerKey: `device:protected-owner-${index}`,
+        });
+        vi.spyOn(protectedSession.engine, "hasPendingQrCode").mockReturnValue(true);
+        sessions.set(`protected-${index}`, protectedSession);
+      }
+      stubEngineOverview();
+
+      await expect(
+        callChat(makeContext(sessions), { sessionId: "new-session" }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(disposeTimedOut).toHaveBeenCalledOnce();
+      expect(sessions.has("timed-out")).toBe(false);
+      expect(sessions.has("new-session")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("bounds retained QR recovery sessions without evicting their live leases", async () => {
     const sessions = new Map<string, SystemAgentChatSession>();
     for (let index = 0; index < 16; index += 1) {
