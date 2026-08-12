@@ -966,6 +966,9 @@ describe("openclaw.chat", () => {
     ).resolves.toMatchObject({ payload: { wizardSettling: true } });
     releaseFollowUp.resolve();
     await followUpPresented.promise;
+    const historyBeforeObservation = engine.historyLength();
+    await engine.resolveOperatorApproval(null, "queue-drain");
+    expect(engine.historyLength()).toBe(historyBeforeObservation);
 
     const droppedReply = await callChat(context, {
       sessionId: "lost-follow-up",
@@ -976,9 +979,18 @@ describe("openclaw.chat", () => {
       throw new Error("retained follow-up response must contain a step");
     }
     const followUpStepId = droppedReply.payload.step.id;
+    const followUpText = droppedReply.payload.reply;
     if (typeof followUpStepId !== "string") {
       throw new Error("retained follow-up step must contain an id");
     }
+    if (typeof followUpText !== "string") {
+      throw new Error("retained follow-up response must contain reply text");
+    }
+    expect(
+      transcriptStoreMocks.appendTranscriptTurn.mock.calls.filter(
+        ([turn]) => turn.role === "assistant" && turn.text === followUpText,
+      ),
+    ).toHaveLength(1);
     expect(engine.hasPendingQrCode()).toBe(false);
     expect(engine.hasRecoverableQrReply()).toBe(true);
 
@@ -996,6 +1008,11 @@ describe("openclaw.chat", () => {
     await expect(
       callChat(context, { sessionId: "lost-follow-up", pollStepId: qrStepId }),
     ).resolves.toEqual(droppedReply);
+    expect(
+      transcriptStoreMocks.appendTranscriptTurn.mock.calls.filter(
+        ([turn]) => turn.role === "assistant" && turn.text === followUpText,
+      ),
+    ).toHaveLength(1);
 
     await expect(
       callChat(context, {
@@ -1004,6 +1021,19 @@ describe("openclaw.chat", () => {
       }),
     ).resolves.toMatchObject({ ok: true });
     expect(engine.hasRecoverableQrReply()).toBe(false);
+    const persistedTurns = transcriptStoreMocks.appendTranscriptTurn.mock.calls.map(
+      ([turn]) => turn,
+    );
+    expect(
+      persistedTurns.filter(
+        (turn) =>
+          (turn.role === "assistant" && turn.text === followUpText) ||
+          (turn.role === "user" && turn.text === "OpenClaw"),
+      ),
+    ).toEqual([
+      expect.objectContaining({ role: "assistant", text: followUpText }),
+      expect.objectContaining({ role: "user", text: "OpenClaw" }),
+    ]);
     await expect(
       callChat(context, { sessionId: "lost-follow-up", pollStepId: qrStepId }),
     ).resolves.toMatchObject({

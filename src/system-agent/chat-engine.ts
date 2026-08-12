@@ -58,7 +58,7 @@ export type SystemAgentChatEngineOptions = {
 
 type RetainedPollReply = {
   expiresAtMs: number;
-  terminalHistoryRecorded: boolean;
+  historyRecorded: boolean;
   reply: SystemAgentChatReply;
 };
 
@@ -145,8 +145,7 @@ export class SystemAgentChatEngine {
       this.wizard.hasPendingQrCode() ||
       this.passivePollObservations.size > 0 ||
       [...this.retainedPollReplies.values()].some(
-        ({ reply, terminalHistoryRecorded }) =>
-          isTerminalPollReply(reply) && !terminalHistoryRecorded,
+        ({ reply, historyRecorded }) => isTerminalPollReply(reply) && !historyRecorded,
       )
     );
   }
@@ -155,8 +154,7 @@ export class SystemAgentChatEngine {
   hasRecoverableQrReply(): boolean {
     this.pruneExpiredPollReplies();
     return [...this.retainedPollReplies.values()].some(
-      ({ reply, terminalHistoryRecorded }) =>
-        !isTerminalPollReply(reply) || terminalHistoryRecorded,
+      ({ reply, historyRecorded }) => !isTerminalPollReply(reply) || historyRecorded,
     );
   }
 
@@ -271,7 +269,7 @@ export class SystemAgentChatEngine {
               expiresAtMs:
                 result.passiveQrRetentionExpiresAtMs ??
                 Date.now() + SYSTEM_AGENT_HOSTED_WIZARD_TIMEOUT_MS,
-              terminalHistoryRecorded: false,
+              historyRecorded: false,
               reply: { ...reply },
             });
           }
@@ -306,10 +304,10 @@ export class SystemAgentChatEngine {
   }
 
   private recordObservedPollReply(retained: RetainedPollReply): SystemAgentChatReply {
-    if (isTerminalPollReply(retained.reply) && !retained.terminalHistoryRecorded) {
-      // Only the request that observes completion may make it durable. The
+    if (!retained.historyRecorded) {
+      // Only the request that observes a retained reply may make it durable. The
       // background observer can finish after its Gateway request has returned.
-      retained.terminalHistoryRecorded = true;
+      retained.historyRecorded = true;
       if (retained.reply.text) {
         this.history.push({ role: "assistant", text: retained.reply.text });
       }

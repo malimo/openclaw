@@ -141,15 +141,25 @@ describe("SystemAgentChatEngine passive QR polling", () => {
       await expect(engine.pollStep(qrStepId)).resolves.toMatchObject({ wizardSettling: true });
       releaseFollowUp.resolve();
       await followUpPresented.promise;
+      const historyBeforeObservation = engine.historyLength();
+      await engine.resolveOperatorApproval(null, "queue-drain");
+      expect(engine.historyLength()).toBe(historyBeforeObservation);
 
-      let followUp: Awaited<ReturnType<SystemAgentChatEngine["pollStep"]>> | undefined;
-      await vi.waitFor(async () => {
-        followUp = await engine.pollStep(qrStepId);
-        expect(followUp.step?.type).toBe("text");
-      });
-      const droppedReply = expectDefined(followUp, "follow-up reply");
+      const droppedReply = await engine.pollStep(qrStepId);
+      expect(droppedReply.step?.type).toBe("text");
       const followUpStep = expectDefined(droppedReply.step, "follow-up step");
+      const followUpText = droppedReply.text;
+      expect(
+        engine
+          .historySince(0)
+          .filter((turn) => turn.role === "assistant" && turn.text === followUpText),
+      ).toHaveLength(1);
       await expect(engine.pollStep(qrStepId)).resolves.toEqual(droppedReply);
+      expect(
+        engine
+          .historySince(0)
+          .filter((turn) => turn.role === "assistant" && turn.text === followUpText),
+      ).toHaveLength(1);
       expect(engine.hasPendingQrCode()).toBe(false);
       expect(engine.hasRecoverableQrReply()).toBe(true);
 
