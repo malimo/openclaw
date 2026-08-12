@@ -239,7 +239,7 @@ describe("linkSignalCliAccount", () => {
     });
   });
 
-  it("preserves a successful link when QR presentation cancels the settling process", async () => {
+  it("trusts the terminal account marker when presentation cancels process exit", async () => {
     const command = createDeferredCommand();
     let rejectPresentation!: (error: Error) => void;
     const presentation = new Promise<void>((_resolve, reject) => {

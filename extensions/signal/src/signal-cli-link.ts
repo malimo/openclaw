@@ -160,8 +160,8 @@ export async function linkSignalCliAccount(params: {
     await displayPromise;
 
     if (associatedAccount) {
-      // signal-cli prints the account only after finishDeviceLink succeeds. A late client
-      // cancellation must not turn that durable success into a second linking attempt.
+      // signal-cli emits this marker only after finishDeviceLink returns. The linked account is
+      // therefore durable even when a late presentation failure terminates the settling process.
       return { ok: true, associatedAccount };
     }
     if (result.code === 0 && result.termination === "exit") {
