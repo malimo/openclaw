@@ -3,6 +3,7 @@ import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import {
   adjustTextareaHeight,
   disconnectComposerPopoverAnchorObserver,
+  disconnectTextareaOverflowObserver,
 } from "./chat-composer-dom.ts";
 import { clearGoalElapsedTimers } from "./chat-composer-goal.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
@@ -165,6 +166,9 @@ export function resetChatComposerState(paneId?: string) {
       if (paneState.composerInput) {
         disconnectComposerPopoverAnchorObserver(paneState.composerInput);
       }
+      if (paneState.composerTextarea) {
+        disconnectTextareaOverflowObserver(paneState.composerTextarea);
+      }
       releaseMicrophoneDeviceWatch(paneState);
     }
     composerStates.delete(paneId);
@@ -174,6 +178,9 @@ export function resetChatComposerState(paneId?: string) {
     state.dictation?.dispose();
     if (state.composerInput) {
       disconnectComposerPopoverAnchorObserver(state.composerInput);
+    }
+    if (state.composerTextarea) {
+      disconnectTextareaOverflowObserver(state.composerTextarea);
     }
     releaseMicrophoneDeviceWatch(state);
   }

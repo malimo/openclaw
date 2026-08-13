@@ -412,6 +412,41 @@ describe("new-session composer sizing lifecycle", () => {
     expect(disconnect).not.toHaveBeenCalled();
     first.container.remove();
   });
+
+  it("disconnects the textarea observer when the shared composer state resets", async () => {
+    const observers: Array<{
+      disconnect: ReturnType<typeof vi.fn>;
+      observed: Element[];
+    }> = [];
+    class TestResizeObserver {
+      disconnect = vi.fn();
+      observed: Element[] = [];
+
+      constructor() {
+        observers.push(this);
+      }
+
+      observe(element: Element) {
+        this.observed.push(element);
+      }
+    }
+    vi.stubGlobal("ResizeObserver", TestResizeObserver);
+    const { container, composer } = renderComposer();
+    document.body.append(container);
+    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) {
+      throw new Error("Expected composer textarea");
+    }
+    await Promise.resolve();
+    const textareaObserver = observers.find((observer) => observer.observed.includes(textarea));
+    expect(textareaObserver).toBeDefined();
+    expect(textareaObserver?.disconnect).not.toHaveBeenCalled();
+
+    resetChatComposerState("new-session");
+
+    expect(textareaObserver?.disconnect).toHaveBeenCalledOnce();
+    container.remove();
+  });
 });
 
 describe("new-session composer attachment drops", () => {
