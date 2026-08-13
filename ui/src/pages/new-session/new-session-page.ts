@@ -310,6 +310,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private resetDraft() {
+    resetChatComposerState("new-session");
     this.place.resetDraft();
     this.submission.resetDraft();
     this.messageOwnerKey = catalog.routeKey(this.data);

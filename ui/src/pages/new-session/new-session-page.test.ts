@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { replaceSlashCommands } from "../../lib/chat/commands.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import "./new-session-page.ts";
 
@@ -92,5 +93,27 @@ describe("new session draft route ownership", () => {
     await settle(page);
 
     expect(message(page)).toBe("");
+  });
+
+  it("clears composer completion state when the route target changes", async () => {
+    replaceSlashCommands([
+      {
+        key: "status",
+        name: "status",
+        description: "Show status.",
+        source: "native",
+      },
+    ]);
+    const page = await mount(routeData("research", "claude"));
+    window.history.replaceState({}, "", "/new?agent=research&catalog=claude");
+    await enterMessage(page, "/");
+    expect(page.querySelector('[role="listbox"][aria-label="Slash commands"]')).not.toBeNull();
+
+    window.history.replaceState({}, "", "/new?agent=main&catalog=codex");
+    page.data = routeData("main", "codex");
+    await settle(page);
+
+    expect(message(page)).toBe("");
+    expect(page.querySelector('[role="listbox"][aria-label="Slash commands"]')).toBeNull();
   });
 });
