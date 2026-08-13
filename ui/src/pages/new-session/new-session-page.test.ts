@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { GatewayAgentRow } from "../../api/types.ts";
-import { replaceSlashCommands } from "../../lib/chat/commands.ts";
+import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import "./new-session-page.ts";
 
@@ -53,6 +53,7 @@ function message(page: NewSessionElement): string {
 }
 
 afterEach(() => {
+  replaceSlashCommands(buildFallbackSlashCommands());
   document.querySelectorAll("openclaw-new-session-page").forEach((element) => element.remove());
   sessionStorage.clear();
   window.history.replaceState({}, "", "/");
