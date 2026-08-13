@@ -2,6 +2,9 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
@@ -40,6 +43,7 @@ function renderComposer(
   render(
     renderNewSessionDraftComposer({
       agentId: "main",
+      getCurrentAgentId: () => "main",
       attachmentDraft,
       canSubmit: overrides.canSubmit ?? true,
       context: undefined,
@@ -109,6 +113,7 @@ describe("new-session composer prompt authoring", () => {
       render(
         renderNewSessionDraftComposer({
           agentId: "main",
+          getCurrentAgentId: () => "main",
           attachmentDraft,
           canSubmit: true,
           context: undefined,
@@ -163,6 +168,85 @@ describe("new-session composer prompt authoring", () => {
       new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
     );
     expect(message).toBe("Polish this with $prose ");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("discards a delayed command catalog after the selected agent changes", async () => {
+    let resolveCommands: (value: CommandsListResult) => void = () => undefined;
+    const commands = new Promise<CommandsListResult>((resolve) => {
+      resolveCommands = resolve;
+    });
+    const request = vi.fn(async () => await commands);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = {
+      gateway: {
+        snapshot: {
+          client,
+          phase: "connected",
+        },
+      },
+    } as unknown as ApplicationContext;
+    const container = document.createElement("div");
+    const attachmentDraft = new NewSessionAttachmentDraft(() => draw());
+    attachmentDrafts.push(attachmentDraft);
+    const onSubmit = vi.fn();
+    let agentId = "agent-a";
+    let message = "";
+
+    const draw = () => {
+      render(
+        renderNewSessionDraftComposer({
+          agentId,
+          getCurrentAgentId: () => agentId,
+          attachmentDraft,
+          canSubmit: true,
+          context,
+          isCatalogTarget: true,
+          message,
+          modelControl: new NewSessionModelControl(draw),
+          requiresModifier: false,
+          submitting: false,
+          onInput: (next) => {
+            message = next;
+            draw();
+          },
+          onRequestUpdate: draw,
+          onSubmit,
+        }),
+        container,
+      );
+    };
+    draw();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+    if (!textarea) {
+      return;
+    }
+    textarea.value = "/agent-a";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    agentId = "agent-b";
+    draw();
+    resolveCommands({
+      commands: [
+        {
+          name: "agent-a-only",
+          textAliases: ["/agent-a-only"],
+          description: "Only available to agent A.",
+          source: "plugin",
+          scope: "text",
+          acceptsArgs: false,
+        },
+      ],
+    });
+    await commands;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const names = Array.from(container.querySelectorAll<HTMLElement>(".slash-menu-name")).map(
+      (entry) => entry.textContent?.trim(),
+    );
+    expect(names).not.toContain("/agent-a-only");
+    expect(message).toBe("/agent-a");
     expect(onSubmit).not.toHaveBeenCalled();
   });
 });
@@ -366,6 +450,7 @@ describe("new-session composer sizing lifecycle", () => {
     render(
       renderNewSessionDraftComposer({
         agentId: "main",
+        getCurrentAgentId: () => "main",
         attachmentDraft: first.attachmentDraft,
         canSubmit: true,
         context: undefined,
@@ -390,6 +475,7 @@ describe("new-session composer sizing lifecycle", () => {
     render(
       renderNewSessionDraftComposer({
         agentId: "main",
+        getCurrentAgentId: () => "main",
         attachmentDraft: first.attachmentDraft,
         canSubmit: true,
         context: undefined,
