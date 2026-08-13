@@ -8,7 +8,7 @@ import { getOptionalSignalChannelRuntime } from "./runtime.js";
 
 const SIGNAL_MANAGED_DAEMON_OWNER_CAPABILITY = "managed-daemon-owner";
 
-export type SignalManagedDaemonOwner = {
+type SignalManagedDaemonOwner = {
   accountId: string;
   account: string;
   cliPath: string;
