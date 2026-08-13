@@ -13,6 +13,8 @@ import { commitComposerDraft, getChatComposerState } from "./chat-composer-state
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 export function resetSlashMenuState(state: ChatComposerState): void {
+  state.slashCommandRefreshGeneration += 1;
+  state.slashCommandRefreshPending = false;
   state.slashMenuMode = "command";
   state.slashMenuCommand = null;
   state.slashMenuArgItems = [];
@@ -52,8 +54,13 @@ function requestSlashCommandRefresh(
   if (!refresh || typeof refresh.then !== "function") {
     return;
   }
+  const generation = state.slashCommandRefreshGeneration + 1;
+  state.slashCommandRefreshGeneration = generation;
   state.slashCommandRefreshPending = true;
   void Promise.resolve(refresh).finally(() => {
+    if (state.slashCommandRefreshGeneration !== generation) {
+      return;
+    }
     state.slashCommandRefreshPending = false;
     const nextValue = getCurrentValue?.() ?? props.getDraft?.() ?? value;
     if (!nextValue.startsWith("/")) {

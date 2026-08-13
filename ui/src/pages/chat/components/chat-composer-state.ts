@@ -17,6 +17,7 @@ function createChatComposerState(): ChatComposerState {
     slashMenuCommand: null,
     slashMenuArgItems: [],
     slashCommandRefreshPending: false,
+    slashCommandRefreshGeneration: 0,
     skillMenuOpen: false,
     skillMenuItems: [],
     skillMenuIndex: 0,
@@ -47,6 +48,7 @@ function createChatComposerState(): ChatComposerState {
     composerInputRef: null,
     dictation: null,
     dictationDraftKey: null,
+    completionDraftKey: null,
     dictationSelection: null,
   };
 }

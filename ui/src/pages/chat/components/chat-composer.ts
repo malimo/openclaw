@@ -9,6 +9,7 @@ import {
   createChatAttachmentDropHandlers,
   isLargePastedTextAttachment,
 } from "./chat-attachments.ts";
+import { syncChatComposerCompletionOwner } from "./chat-composer-completion-owner.ts";
 import { renderContextNotice } from "./chat-composer-context.ts";
 import { renderMicrophonePicker, type ChatRunControlsProps } from "./chat-composer-controls.ts";
 import { syncChatComposerDictation } from "./chat-composer-dictation.ts";
@@ -55,6 +56,7 @@ export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.
 
 export function renderChatComposer(props: ChatComposerProps) {
   const state = getChatComposerState(props.paneId);
+  const requestUpdate = props.onRequestUpdate ?? (() => {});
   const isSessionStyle = props.style !== "new-session";
   const canCompose = props.canSend;
   const isBusy = props.sending || props.stream !== null;
@@ -76,6 +78,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     ? props.sessions?.sessions?.find((row) => row.key === props.sessionKey)
     : undefined;
   const draftKey = composerDraftKey(props);
+  syncChatComposerCompletionOwner({ draftKey, props, requestUpdate, state });
   if (state.dictationDraftKey !== null && state.dictationDraftKey !== draftKey) {
     state.dictation?.dispose();
     state.dictation = null;
@@ -141,7 +144,6 @@ export function renderChatComposer(props: ChatComposerProps) {
         : composerRunStatus.phase === "done"
           ? t("chat.composer.runDone")
           : t("chat.composer.runInterrupted");
-  const requestUpdate = props.onRequestUpdate ?? (() => {});
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
   const steerNowEnabled =
     isSessionStyle &&

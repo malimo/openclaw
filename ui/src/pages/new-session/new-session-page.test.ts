@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { GatewayAgentRow } from "../../api/types.ts";
 import { replaceSlashCommands } from "../../lib/chat/commands.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import "./new-session-page.ts";
 
 type NewSessionElement = HTMLElement & {
   data: NewSessionRouteData | undefined;
+  place: {
+    agents: () => GatewayAgentRow[];
+  };
+  requestUpdate: () => void;
   updateComplete: Promise<boolean>;
 };
 
@@ -115,5 +120,39 @@ describe("new session draft route ownership", () => {
 
     expect(message(page)).toBe("");
     expect(page.querySelector('[role="listbox"][aria-label="Slash commands"]')).toBeNull();
+  });
+
+  it("retires the open command menu through the actual agent selector", async () => {
+    replaceSlashCommands([
+      {
+        key: "agent-a-only",
+        name: "agent-a-only",
+        description: "Only available to agent A.",
+        source: "plugin",
+      },
+    ]);
+    const page = document.createElement("openclaw-new-session-page") as NewSessionElement;
+    page.place.agents = () =>
+      [
+        { id: "agent-a", name: "Agent A" },
+        { id: "agent-b", name: "Agent B" },
+      ] as GatewayAgentRow[];
+    page.data = routeData("agent-a");
+    document.body.append(page);
+    await settle(page);
+    await enterMessage(page, "/agent-a");
+    expect(page.querySelector(".slash-menu-name")?.textContent?.trim()).toBe("/agent-a-only");
+
+    const selector = page.querySelector<HTMLElement & { onSelect: (agentId: string) => void }>(
+      "openclaw-agent-select",
+    );
+    expect(selector).not.toBeNull();
+    selector?.onSelect("agent-b");
+    await settle(page);
+
+    const names = Array.from(page.querySelectorAll<HTMLElement>(".slash-menu-name")).map((entry) =>
+      entry.textContent?.trim(),
+    );
+    expect(names).not.toContain("/agent-a-only");
   });
 });

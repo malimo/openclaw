@@ -260,6 +260,18 @@ function loadRemoteSlashCommands(
   return inFlight;
 }
 
+export function activateSlashCommands(params: {
+  client: GatewayBrowserClient | null;
+  agentId?: string | null;
+}): void {
+  const agentId = params.agentId?.trim();
+  const cached = params.client
+    ? getRemoteSlashCommandCache(params.client).get(remoteSlashCommandCacheKey(agentId))
+    : undefined;
+  refreshSeq += 1;
+  replaceSlashCommands(cached?.commands ?? buildFallbackSlashCommands());
+}
+
 export function applyRemoteSlashCommandsResult(params: {
   client: GatewayBrowserClient | null;
   agentId?: string | null;

@@ -176,7 +176,22 @@ describe("new-session composer prompt authoring", () => {
     const commands = new Promise<CommandsListResult>((resolve) => {
       resolveCommands = resolve;
     });
-    const request = vi.fn(async () => await commands);
+    const request = vi.fn(async (_method: string, params?: { agentId?: string }) =>
+      params?.agentId === "agent-a"
+        ? await commands
+        : {
+            commands: [
+              {
+                name: "agent-b-only",
+                textAliases: ["/agent-b-only"],
+                description: "Only available to agent B.",
+                source: "plugin" as const,
+                scope: "text" as const,
+                acceptsArgs: false,
+              },
+            ],
+          },
+    );
     const client = { request } as unknown as GatewayBrowserClient;
     const context = {
       gateway: {
@@ -222,7 +237,7 @@ describe("new-session composer prompt authoring", () => {
     if (!textarea) {
       return;
     }
-    textarea.value = "/agent-a";
+    textarea.value = "/";
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
 
@@ -241,12 +256,15 @@ describe("new-session composer prompt authoring", () => {
       ],
     });
     await commands;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const names = Array.from(container.querySelectorAll<HTMLElement>(".slash-menu-name")).map(
-      (entry) => entry.textContent?.trim(),
-    );
-    expect(names).not.toContain("/agent-a-only");
-    expect(message).toBe("/agent-a");
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() => {
+      const names = Array.from(container.querySelectorAll<HTMLElement>(".slash-menu-name")).map(
+        (entry) => entry.textContent?.trim(),
+      );
+      expect(names).not.toContain("/agent-a-only");
+      expect(names).toContain("/agent-b-only");
+    });
+    expect(message).toBe("/");
     expect(onSubmit).not.toHaveBeenCalled();
   });
 });

@@ -5,7 +5,7 @@ import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { refreshSlashCommands } from "../chat/chat-commands.ts";
+import { activateSlashCommands, refreshSlashCommands } from "../chat/chat-commands.ts";
 import { renderChatAttachmentMenu } from "../chat/components/chat-attachments.ts";
 import { renderChatComposer } from "../chat/components/chat-composer.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
@@ -212,6 +212,8 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
     getDraft: () => options.message,
     onDraftChange: options.onInput,
     onRequestUpdate: options.onRequestUpdate,
+    onCompletionOwnerChange: () =>
+      activateSlashCommands({ client, agentId: options.getCurrentAgentId() }),
     onSlashIntent: client
       ? () => {
           const agentId = options.agentId;
