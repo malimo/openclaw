@@ -515,7 +515,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           sessions: context.systemAgentSessions,
           ownerKey: `connection:${connId}`,
           approvalManager: context.systemAgentApprovalManager,
-        }).catch((error) => {
+        }).catch((error: unknown) => {
           logGateway.warn(`OpenClaw session cleanup failed: ${formatError(error)}`);
         });
         cleanupTalkConnection(connId, logGateway);
