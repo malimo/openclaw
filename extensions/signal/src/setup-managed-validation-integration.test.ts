@@ -9,9 +9,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SignalTransportProbeResult } from "./setup-transport.js";
 
 const mocks = vi.hoisted(() => ({
-  probeManagedSignalSetup: vi.fn(
-    async (): Promise<SignalTransportProbeResult> => ({ ok: true, status: 200 }),
-  ),
+  probeManagedSignalSetup: vi.fn<
+    typeof import("./setup-managed-validation.js").probeManagedSignalSetup
+  >(async (): Promise<SignalTransportProbeResult> => ({ ok: true, status: 200 })),
 }));
 
 vi.mock("./setup-managed-validation.js", async (importOriginal) => {
