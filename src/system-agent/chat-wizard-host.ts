@@ -53,7 +53,7 @@ export type ChatWizardAnswerResult = ChatWizardResult & {
   userHistoryText: string;
 };
 
-export type ChatWizardCancellation = {
+type ChatWizardCancellation = {
   finish: () => Promise<ChatWizardAnswerResult>;
 };
 

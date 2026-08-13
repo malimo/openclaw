@@ -12,7 +12,7 @@ type WizardSessions = GatewayRequestContext["wizardSessions"];
 type GatewayWizardSession = WizardSessions extends Map<string, infer Session> ? Session : never;
 type ApprovalManager = NonNullable<GatewayRequestContext["systemAgentApprovalManager"]>;
 
-export type DisplacedSystemAgentSession = {
+type DisplacedSystemAgentSession = {
   sessionId: string;
   session: SystemAgentSession;
   approvalManager?: ApprovalManager;
