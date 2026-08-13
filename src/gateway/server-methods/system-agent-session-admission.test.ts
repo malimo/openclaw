@@ -22,7 +22,7 @@ import {
   systemAgentHandler,
   waitOneTask,
 } from "./system-agent.test-support.js";
-import type { GatewayClient } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 describe("openclaw.chat", () => {
   it("refuses to create a session before inference is available", async () => {
