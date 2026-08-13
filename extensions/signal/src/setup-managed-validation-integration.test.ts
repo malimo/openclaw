@@ -71,6 +71,7 @@ describe("Signal managed setup validation wiring", () => {
     expect(mocks.probeManagedSignalSetup).toHaveBeenCalledWith(
       expect.objectContaining({
         account: "+15555550123",
+        reusableConfiguredAccount: undefined,
         transport: expect.objectContaining({ kind: "managed-native" }),
       }),
     );

@@ -307,9 +307,10 @@ export const signalSetupWizard: ChannelSetupWizard = {
     if (!account) {
       throw new Error("Signal managed setup requires an account number before validation.");
     }
-    const reusableConfiguredAccount = normalizeSignalAccountInput(
-      params.credentialValues[signalSetupStateKeys.managedReuseAccount],
-    );
+    const reusableConfiguredAccount =
+      normalizeSignalAccountInput(
+        params.credentialValues[signalSetupStateKeys.managedReuseAccount],
+      ) ?? undefined;
     const transport = prepareSignalManagedNativeTransport({
       cfg: params.cfg,
       accountId: params.accountId,
