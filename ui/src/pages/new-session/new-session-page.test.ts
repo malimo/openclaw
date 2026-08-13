@@ -123,14 +123,6 @@ describe("new session draft route ownership", () => {
   });
 
   it("retires the open command menu through the actual agent selector", async () => {
-    replaceSlashCommands([
-      {
-        key: "agent-a-only",
-        name: "agent-a-only",
-        description: "Only available to agent A.",
-        source: "plugin",
-      },
-    ]);
     const page = document.createElement("openclaw-new-session-page") as NewSessionElement;
     page.place.agents = () =>
       [
@@ -140,6 +132,14 @@ describe("new session draft route ownership", () => {
     page.data = routeData("agent-a");
     document.body.append(page);
     await settle(page);
+    replaceSlashCommands([
+      {
+        key: "agent-a-only",
+        name: "agent-a-only",
+        description: "Only available to agent A.",
+        source: "plugin",
+      },
+    ]);
     await enterMessage(page, "/agent-a");
     expect(page.querySelector(".slash-menu-name")?.textContent?.trim()).toBe("/agent-a-only");
 

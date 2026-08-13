@@ -93,16 +93,6 @@ afterEach(() => {
 
 describe("new-session composer prompt authoring", () => {
   it("shares slash and skill completion while omitting existing-session actions", () => {
-    replaceSlashCommands([
-      ...buildFallbackSlashCommands(),
-      {
-        key: "prose",
-        name: "prose",
-        description: "Draft polished prose.",
-        source: "skill",
-        skillModelVisible: true,
-      },
-    ]);
     const container = document.createElement("div");
     const attachmentDraft = new NewSessionAttachmentDraft(() => draw());
     const onSubmit = vi.fn();
@@ -142,6 +132,16 @@ describe("new-session composer prompt authoring", () => {
       textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
     };
     draw();
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "prose",
+        name: "prose",
+        description: "Draft polished prose.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
 
     const shell = container.querySelector<HTMLElement>(".agent-chat__composer-shell");
     expect(shell?.dataset.composerStyle).toBe("new-session");
@@ -171,7 +171,15 @@ describe("new-session composer prompt authoring", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("discards a delayed command catalog after the selected agent changes", async () => {
+  it("fences initial and delayed command catalogs to the selected agent", async () => {
+    replaceSlashCommands([
+      {
+        key: "previous-agent-only",
+        name: "previous-agent-only",
+        description: "Only available to the previously viewed agent.",
+        source: "plugin",
+      },
+    ]);
     let resolveCommands: (value: CommandsListResult) => void = () => undefined;
     const commands = new Promise<CommandsListResult>((resolve) => {
       resolveCommands = resolve;
@@ -239,6 +247,11 @@ describe("new-session composer prompt authoring", () => {
     }
     textarea.value = "/";
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    expect(
+      Array.from(container.querySelectorAll<HTMLElement>(".slash-menu-name")).map((entry) =>
+        entry.textContent?.trim(),
+      ),
+    ).not.toContain("/previous-agent-only");
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
 
     agentId = "agent-b";
