@@ -91,7 +91,7 @@ vi.mock("../../system-agent/onboarding-welcome.js", () => ({
   buildOnboardingWelcome: onboardingWelcomeMocks.buildOnboardingWelcome,
 }));
 
-export type RespondCall = {
+type RespondCall = {
   ok: boolean;
   payload?: unknown;
   error?: unknown;
@@ -337,9 +337,7 @@ export async function callChat(
 }
 
 export {
-  greetingMocks,
   inferenceFallbackMocks,
-  onboardingWelcomeMocks,
   providerAuthChoiceMocks,
   setupInferenceDetectionMocks,
   setupInferenceMocks,
