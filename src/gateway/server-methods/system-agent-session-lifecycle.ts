@@ -256,11 +256,10 @@ export function disposeSystemAgentSessionsForOwner(params: {
       }),
     );
   }
-  const disposal = settleCleanupTasks(
+  return settleCleanupTasks(
     disposals,
     (errorCount) => `Failed to dispose ${errorCount} OpenClaw session(s)`,
   );
-  return trackSessionSettlement(params.sessions, disposal);
 }
 
 export function retireAndDisposeSystemAgentSessions(params: {

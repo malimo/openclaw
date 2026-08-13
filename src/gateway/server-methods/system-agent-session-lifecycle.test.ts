@@ -39,6 +39,37 @@ describe("system-agent session lifecycle", () => {
     await expect(disposal).resolves.toBeUndefined();
   });
 
+  it("reports owner cleanup failure once when retirement joins the same disposal", async () => {
+    const release = createDeferred();
+    const cleanupError = new Error("connection cleanup failed");
+    const sessions = new Map([
+      [
+        "connection-session",
+        session("connection:one", async () => {
+          await release.promise;
+          throw cleanupError;
+        }),
+      ],
+    ]) as Sessions;
+    const wizardSessions = new Map() as GatewayRequestContext["wizardSessions"];
+
+    const ownerCleanup = disposeSystemAgentSessionsForOwner({
+      sessions,
+      ownerKey: "connection:one",
+    });
+    const retirement = retireAndDisposeSystemAgentSessions({ sessions, wizardSessions });
+    const ownerSettlement = expect(ownerCleanup).rejects.toMatchObject({
+      errors: [cleanupError],
+    });
+    const retirementSettlement = expect(retirement).rejects.toMatchObject({
+      errors: [cleanupError],
+    });
+    release.resolve();
+
+    await ownerSettlement;
+    await retirementSettlement;
+  });
+
   it("retires admission before cancelling and joining every setup owner", async () => {
     const dispose = vi.fn(async () => undefined);
     const cancel = vi.fn(() => true);
