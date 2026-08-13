@@ -4,7 +4,6 @@ import { loadSettings, normalizeChatSendShortcut, patchSettings } from "../../..
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
-import { ComposerDictationController, insertComposerDictation } from "../composer-dictation.ts";
 import { discoverRealtimeTalkInputs, observeRealtimeTalkDevices } from "../realtime-talk-input.ts";
 import {
   createChatAttachmentDropHandlers,
@@ -12,6 +11,7 @@ import {
 } from "./chat-attachments.ts";
 import { renderContextNotice } from "./chat-composer-context.ts";
 import { renderMicrophonePicker, type ChatRunControlsProps } from "./chat-composer-controls.ts";
+import { syncChatComposerDictation } from "./chat-composer-dictation.ts";
 import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
@@ -438,61 +438,16 @@ export function renderChatComposer(props: ChatComposerProps) {
           onSelect: selectMicrophone,
         })
       : nothing;
-  let dictation: ComposerDictationController | undefined;
-  if (isSessionStyle && props.onToggleRealtimeTalk && props.composerHoldToRecord !== false) {
-    const dictationOptions = {
-      client: props.gatewayClient ?? null,
-      connected: props.connected,
-      enabled: true,
-      realtimeTalkActive: props.realtimeTalkActive === true,
-      onCommit: (transcript: string) => {
-        const target = state.composerTextarea;
-        const selection = state.dictationSelection ?? {
-          start: target?.selectionStart ?? visibleDraft.length,
-          end: target?.selectionEnd ?? visibleDraft.length,
-        };
-        const currentDraft = target?.value ?? props.getDraft?.() ?? props.draft;
-        const insertion = insertComposerDictation(
-          currentDraft,
-          transcript,
-          selection.start,
-          selection.end,
-        );
-        if (target) {
-          target.value = insertion.value;
-          adjustTextareaHeight(target);
-        }
-        commitComposerDraft(props, insertion.value);
-        state.dictationSelection = null;
-        requestUpdate();
-        queueMicrotask(() => {
-          const textarea = state.composerTextarea;
-          if (!textarea) {
-            return;
-          }
-          textarea.focus({ preventScroll: true });
-          textarea.selectionStart = insertion.caret;
-          textarea.selectionEnd = insertion.caret;
-        });
-      },
-      onError: (message: string) => props.onDictationError?.(message),
-      onStateChange: requestUpdate,
-      // With an initial empty composer, this button retains the existing
-      // send-after-typing behavior until the host rerenders the primary actions.
-      // Once a draft is rendered, the separate voice control starts Talk directly.
-      onTap:
-        visibleDraft.trim() || props.attachments?.length
-          ? () => props.onToggleRealtimeTalk?.()
-          : handleVoicePrimaryAction,
-    };
-    state.dictation ??= new ComposerDictationController(dictationOptions);
-    state.dictation.update(dictationOptions);
-    dictation = state.dictation;
-  } else if (state.dictation) {
-    state.dictation.dispose();
-    state.dictation = null;
-    state.dictationSelection = null;
-  }
+  const dictation = syncChatComposerDictation({
+    enabled: Boolean(
+      isSessionStyle && props.onToggleRealtimeTalk && props.composerHoldToRecord !== false,
+    ),
+    onVoiceTap: handleVoicePrimaryAction,
+    props,
+    requestUpdate,
+    state,
+    visibleDraft,
+  });
   const handleDictationPointerDown = (event: PointerEvent) => {
     const target = state.composerTextarea;
     state.dictationSelection = {
