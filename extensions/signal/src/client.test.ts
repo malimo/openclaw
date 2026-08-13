@@ -319,7 +319,7 @@ describe("signalAccountCheck", () => {
       if (req.method === "GET") {
         expect(req.url).toBe("/api/v1/events?account=%2B15555550124");
         res.writeHead(200, { "Content-Type": "text/event-stream" });
-        res.end();
+        res.flushHeaders();
         return;
       }
       expect(JSON.parse(await readRequestBody(req))).toEqual({
@@ -341,6 +341,33 @@ describe("signalAccountCheck", () => {
       ok: true,
       status: 200,
       error: null,
+    });
+  });
+
+  it("rejects a selected account whose native receive stream has already ended", async () => {
+    const baseUrl = await withSignalServer(async (req, res) => {
+      if (req.method === "GET") {
+        expect(req.url).toBe("/api/v1/events?account=%2B15555550124");
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end();
+        return;
+      }
+      await readRequestBody(req);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          result: [{ number: "+15555550124" }],
+          id: "test-id",
+        }),
+      );
+    });
+
+    await expect(signalAccountCheck(baseUrl, 10_000, "+15555550124")).resolves.toEqual({
+      ok: false,
+      status: null,
+      error:
+        "Signal native receive stream is unavailable: Signal SSE stream ended before readiness was established",
     });
   });
 
@@ -416,7 +443,7 @@ describe("signalAccountCheck", () => {
       if (req.method === "GET") {
         expect(req.url).toBe("/api/v1/events?account=%2B15555550124");
         res.writeHead(200, { "Content-Type": "text/event-stream" });
-        res.end();
+        res.flushHeaders();
         return;
       }
       res.writeHead(200, { "Content-Type": "application/json" });

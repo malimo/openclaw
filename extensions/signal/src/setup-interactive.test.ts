@@ -1,3 +1,5 @@
+import { once } from "node:events";
+import http from "node:http";
 import { hostname } from "node:os";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -45,6 +47,7 @@ vi.mock("./setup-transport.js", async () => {
   };
 });
 
+import { signalAccountCheck } from "./client.js";
 import { signalSetupWizard } from "./setup-surface.js";
 
 function toCredentialValues(
@@ -409,6 +412,69 @@ describe("Signal existing-server setup", () => {
     expect(queued.confirm).not.toHaveBeenCalled();
     expect(queued.note).toHaveBeenCalledWith(
       expect.stringContaining("receive stream is unavailable"),
+      "Signal setup",
+    );
+  });
+
+  it("does not persist a native server whose receive stream has already ended", async () => {
+    const server = http.createServer((req, res) => {
+      if (req.method === "GET") {
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end();
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          result: [{ number: "+15555550123" }],
+          id: "test-id",
+        }),
+      );
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing test server address");
+    }
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    mocks.probeSignalTransport.mockImplementationOnce(async () =>
+      signalAccountCheck(baseUrl, 10_000, "+15555550123"),
+    );
+    const cfg: OpenClawConfig = {
+      channels: { signal: { account: "+15555550123" } },
+    };
+    const queued = createQueuedWizardPrompter({ selectValues: ["stop"] });
+
+    try {
+      await expect(
+        runSetupWizardFinalize({
+          finalize: signalSetupWizard.finalize,
+          cfg,
+          credentialValues: {
+            signalTransportKind: "external-native",
+            signalServerUrl: baseUrl,
+          },
+          prompter: queued.prompter,
+          runtime: createRuntimeEnv({ throwOnExit: false }),
+        }),
+      ).rejects.toBeInstanceOf(WizardCancelledError);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+      });
+    }
+
+    expect(cfg.channels?.signal?.transport).toBeUndefined();
+    expect(queued.note).toHaveBeenCalledWith(
+      expect.stringContaining("stream ended before readiness was established"),
       "Signal setup",
     );
   });

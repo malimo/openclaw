@@ -2,6 +2,7 @@
 import { Buffer } from "node:buffer";
 import http, { type ClientRequest, type IncomingMessage } from "node:http";
 import https from "node:https";
+import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -424,15 +425,37 @@ async function signalReceiveCheck(
   url.searchParams.set("account", account);
   try {
     const { response, cleanup } = await openSignalEventStream(url, undefined, timeoutMs);
-    response.destroy();
-    cleanup();
-    return { ok: true, status: 200, error: null };
+    try {
+      await assertSignalReceiveStreamOpen(response);
+      return { ok: true, status: 200, error: null };
+    } finally {
+      response.destroy();
+      cleanup();
+    }
   } catch (error) {
     return {
       ok: false,
       status: null,
       error: `Signal native receive stream is unavailable: ${formatErrorMessage(error)}`,
     };
+  }
+}
+
+async function assertSignalReceiveStreamOpen(response: IncomingMessage): Promise<void> {
+  let streamError: Error | undefined;
+  const onError = (error: Error) => {
+    streamError ??= error;
+  };
+  response.on("error", onError);
+  // Node exposes response headers before the parser records same-packet EOF in `complete`.
+  // Wait one check phase so an already-ended HTTP 200 cannot masquerade as a live SSE stream.
+  await waitForImmediate();
+  response.off("error", onError);
+  if (streamError) {
+    throw streamError;
+  }
+  if (response.complete || response.readableEnded || response.destroyed) {
+    throw new Error("Signal SSE stream ended before readiness was established");
   }
 }
 
