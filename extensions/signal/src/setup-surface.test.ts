@@ -51,7 +51,7 @@ function createQrPrompter(params?: {
   const confirmValues = [...(params?.confirmValues ?? [false, true])];
   return createTestWizardPrompter({
     confirm: vi.fn(async () => confirmValues.shift() ?? false),
-    qrCode: params?.qrCode ?? vi.fn(async () => true),
+    qrCode: params?.qrCode ?? vi.fn(async () => undefined),
   });
 }
 
@@ -263,12 +263,14 @@ describe("signalSetupWizard QR linking", () => {
     expect(linkSignalCliAccountMock).not.toHaveBeenCalled();
   });
 
-  it("presents the generic QR, waits for signal-cli, and persists the linked account", async () => {
+  it("presents the generic QR until signal-cli completes and persists the linked account", async () => {
     let finishLink!: () => void;
     const completion = new Promise<void>((resolve) => {
       finishLink = resolve;
     });
-    const qrCode = vi.fn(async () => true);
+    const qrCode = vi.fn(async (params: Parameters<NonNullable<WizardPrompter["qrCode"]>>[0]) => {
+      await params.dismissed;
+    });
     const note = vi.fn<WizardPrompter["note"]>(async () => undefined);
     const beforePersistentEffect = vi.fn(async () => undefined);
     const abortController = new AbortController();
@@ -508,10 +510,9 @@ describe("signalSetupWizard QR linking", () => {
     );
   });
 
-  it("finishes setup when signal-cli completes before the QR is acknowledged", async () => {
+  it("finishes setup automatically when signal-cli completes", async () => {
     const qrCode = vi.fn(async (params: Parameters<NonNullable<WizardPrompter["qrCode"]>>[0]) => {
       await params.dismissed;
-      return true;
     });
     linkSignalCliAccountMock.mockImplementationOnce(async ({ onLinkUri }) => {
       await onLinkUri(

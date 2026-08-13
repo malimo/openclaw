@@ -188,20 +188,14 @@ export const signalSetupWizard: ChannelSetupWizard = {
       ...(configPath ? { configPath } : {}),
       ...(options?.abortSignal ? { signal: options.abortSignal } : {}),
       onLinkUri: async (uri, completion, expiresAtMs) => {
-        const confirmed = await presentQrCode({
+        await presentQrCode({
           title: "Signal account linking",
           message:
-            "On your phone, open Signal > Settings > Linked devices, scan this code, approve the device, then choose Continue.",
+            "On your phone, open Signal > Settings > Linked devices, scan this code, and approve the device. Setup continues automatically.",
           text: uri,
           dismissed: completion,
           expiresAtMs,
         });
-        if (!confirmed) {
-          throw new Error("Signal account linking was not confirmed.");
-        }
-        // The child-process owner reports the concrete signal-cli result after this callback
-        // releases. Waiting here prevents Continue from interrupting post-approval registration.
-        await completion;
       },
     });
     if (!linkResult.ok) {
