@@ -12,6 +12,13 @@ type WizardSessions = GatewayRequestContext["wizardSessions"];
 type GatewayWizardSession = WizardSessions extends Map<string, infer Session> ? Session : never;
 type ApprovalManager = NonNullable<GatewayRequestContext["systemAgentApprovalManager"]>;
 
+export type DisplacedSystemAgentSession = {
+  sessionId: string;
+  session: SystemAgentSession;
+  approvalManager?: ApprovalManager;
+  reason: string;
+};
+
 const retiredStores = new WeakSet<SystemAgentSessions>();
 const pendingSessionSettlements = new WeakMap<SystemAgentSessions, Set<Promise<void>>>();
 const settledInitializationCleanupFailures = new WeakMap<SystemAgentSessions, Error[]>();
@@ -47,7 +54,10 @@ export function initializeSystemAgentSession(
   sessionId: string,
   initialize: (lease: {
     ownEngine: (engine: SystemAgentSession["engine"]) => void;
-    commitSession: (session: SystemAgentSession) => void;
+    commitSession: (
+      session: SystemAgentSession,
+      displaced?: DisplacedSystemAgentSession,
+    ) => Promise<void> | undefined;
   }) => Promise<void>,
 ): Promise<SystemAgentSession | undefined> {
   assertSystemAgentSessionStoreActive(sessions);
@@ -61,18 +71,39 @@ export function initializeSystemAgentSession(
         ownEngine: (engine) => {
           uncommittedEngine = engine;
         },
-        commitSession: (session) => {
+        commitSession: (session, displaced) => {
           if (uncommittedEngine !== session.engine) {
             throw new Error("OpenClaw session initialization does not own this engine.");
           }
           assertSystemAgentSessionStoreActive(sessions);
+          if (displaced) {
+            if (displaced.sessionId === sessionId) {
+              throw new Error("OpenClaw session replacement cannot displace itself.");
+            }
+            if (sessions.get(displaced.sessionId) !== displaced.session) {
+              throw new Error("OpenClaw session replacement target changed before commit.");
+            }
+          }
           sessions.set(sessionId, session);
           // The map and lease never own the engine across an await; commit transfers it here.
           uncommittedEngine = undefined;
           committedSession = session;
+          if (!displaced) {
+            return undefined;
+          }
+          sessions.delete(displaced.sessionId);
+          return startSystemAgentSessionCleanup({
+            sessions,
+            session: displaced.session,
+            approvalManager: displaced.approvalManager,
+            reason: displaced.reason,
+            expireApproval: true,
+          });
         },
       });
-      return committedSession;
+      return committedSession && sessions.get(sessionId) === committedSession
+        ? committedSession
+        : undefined;
     } finally {
       try {
         await uncommittedEngine?.dispose();
@@ -151,6 +182,40 @@ export function admitWizard(
   return trackWizardAdmission(sessions, admission);
 }
 
+function startSystemAgentSessionCleanup(params: {
+  sessions: SystemAgentSessions;
+  session: SystemAgentSession;
+  approvalManager?: ApprovalManager;
+  reason: string;
+  expireApproval: boolean;
+}): Promise<void> {
+  let engineDisposal: Promise<void>;
+  try {
+    engineDisposal = params.session.engine.dispose();
+  } catch (error) {
+    engineDisposal = Promise.reject(toErrorObject(error, "Unknown system-agent cleanup failure"));
+  }
+  let approvalExpiration: Promise<void> | undefined;
+  if (params.expireApproval && params.session.pendingApproval && params.approvalManager) {
+    try {
+      params.approvalManager.expire(params.session.pendingApproval.id, params.reason);
+      approvalExpiration = Promise.resolve();
+    } catch (error) {
+      // Durable-store faults stay asynchronous so one approval cannot skip sibling cleanup.
+      approvalExpiration = Promise.reject(toErrorObject(error, "Unknown approval cleanup failure"));
+    }
+  }
+  const cleanup = approvalExpiration
+    ? settleCleanupTasks(
+        [engineDisposal, approvalExpiration],
+        (errorCount) => `Failed to clean up ${errorCount} OpenClaw session resource(s)`,
+      )
+    : engineDisposal;
+  // Register only the aggregate in the same turn as removal/replacement so
+  // shutdown joins cleanup without reporting one engine failure twice.
+  return trackSessionSettlement(params.sessions, cleanup);
+}
+
 export function disposeSystemAgentSession(params: {
   sessions: SystemAgentSessions;
   sessionId: string;
@@ -162,24 +227,13 @@ export function disposeSystemAgentSession(params: {
   if (ownsEntry) {
     params.sessions.delete(params.sessionId);
   }
-  // Register disposal in the same turn as removal so shutdown sees either the
-  // live map entry or its cleanup, including when approval expiry throws.
-  const disposal = trackSessionSettlement(params.sessions, params.session.engine.dispose());
-  if (!ownsEntry || !params.session.pendingApproval || !params.approvalManager) {
-    return disposal;
-  }
-  let approvalExpiration = Promise.resolve();
-  try {
-    params.approvalManager.expire(params.session.pendingApproval.id, params.reason);
-  } catch (error) {
-    // Durable-store faults stay asynchronous so one approval cannot skip sibling cleanup.
-    approvalExpiration = Promise.reject(toErrorObject(error, "Unknown approval cleanup failure"));
-  }
-  const cleanup = settleCleanupTasks(
-    [disposal, approvalExpiration],
-    (errorCount) => `Failed to clean up ${errorCount} OpenClaw session resource(s)`,
-  );
-  return trackSessionSettlement(params.sessions, cleanup);
+  return startSystemAgentSessionCleanup({
+    sessions: params.sessions,
+    session: params.session,
+    approvalManager: params.approvalManager,
+    reason: params.reason,
+    expireApproval: ownsEntry,
+  });
 }
 
 export function disposeSystemAgentSessionsForOwner(params: {

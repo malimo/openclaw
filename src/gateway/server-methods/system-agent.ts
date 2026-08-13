@@ -17,6 +17,7 @@ import {
   validateSystemAgentSetupVerifyParams,
   type SystemAgentChatQuestion,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   SYSTEM_AGENT_APPROVAL_DECISIONS,
   SYSTEM_AGENT_APPROVAL_TIMEOUT_MS,
@@ -162,10 +163,14 @@ function resolveSystemAgentSessionOwnerKey(params: {
   return connId ? `connection:${connId}` : undefined;
 }
 
-async function evictOldestSession(
+type SystemAgentSessionCapacity =
+  | { status: "admit" }
+  | { status: "replace"; sessionId: string; session: SystemAgentChatSession }
+  | { status: "full" };
+
+function planSystemAgentSessionCapacity(
   sessions: Map<string, SystemAgentChatSession>,
-  context: GatewayRequestContext,
-): Promise<boolean> {
+): SystemAgentSessionCapacity {
   let activeSessionCount = 0;
   const protectedQrSessions = new Map<string, { key: string; lastUsedAt: number }>();
   const recoveryKeys = new Set<string>();
@@ -187,7 +192,7 @@ async function evictOldestSession(
     activeSessionCount < MAX_SYSTEM_AGENT_ACTIVE_SESSIONS &&
     sessions.size < MAX_SYSTEM_AGENT_SESSION_ENTRIES
   ) {
-    return true;
+    return { status: "admit" };
   }
   const protectedKeys = new Set([...protectedQrSessions.values()].map(({ key }) => key));
   let oldestKey: string | undefined;
@@ -206,17 +211,10 @@ async function evictOldestSession(
   if (oldestKey !== undefined) {
     const oldest = sessions.get(oldestKey);
     if (oldest) {
-      await disposeSystemAgentSession({
-        sessions,
-        sessionId: oldestKey,
-        session: oldest,
-        approvalManager: context.systemAgentApprovalManager,
-        reason: "session-evicted",
-      });
+      return { status: "replace", sessionId: oldestKey, session: oldest };
     }
-    return true;
   }
-  return false;
+  return { status: "full" };
 }
 
 function persistEngineHistory(engine: SystemAgentChatSession["engine"], startIndex: number): void {
@@ -740,7 +738,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               if (rejectInactiveConnectionOwner()) {
                 return;
               }
-              if (!(await evictOldestSession(sessions, context))) {
+              const capacity = planSystemAgentSessionCapacity(sessions);
+              if (capacity.status === "full") {
                 respond(
                   false,
                   undefined,
@@ -752,21 +751,36 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
                 );
                 return;
               }
+              assertSystemAgentSessionStoreActive(sessions);
+              persistEngineHistory(engine, welcomeHistoryStart);
               if (rejectInactiveConnectionOwner()) {
                 return;
               }
-              assertSystemAgentSessionStoreActive(sessions);
-              persistEngineHistory(engine, welcomeHistoryStart);
-              commitSession({
-                engine,
-                welcome,
-                ...(welcomeQuestion ? { welcomeQuestion } : {}),
-                ...(greetingAuditSequence !== undefined
-                  ? { welcomeAuditSequence: greetingAuditSequence }
-                  : {}),
-                lastUsedAt: Date.now(),
-                ownerKey,
-                supportsQrCode,
+              const displacedCleanup = commitSession(
+                {
+                  engine,
+                  welcome,
+                  ...(welcomeQuestion ? { welcomeQuestion } : {}),
+                  ...(greetingAuditSequence !== undefined
+                    ? { welcomeAuditSequence: greetingAuditSequence }
+                    : {}),
+                  lastUsedAt: Date.now(),
+                  ownerKey,
+                  supportsQrCode,
+                },
+                capacity.status === "replace"
+                  ? {
+                      sessionId: capacity.sessionId,
+                      session: capacity.session,
+                      approvalManager: context.systemAgentApprovalManager,
+                      reason: "session-evicted",
+                    }
+                  : undefined,
+              );
+              void displacedCleanup?.catch((error: unknown) => {
+                context.logGateway.warn(
+                  `OpenClaw displaced-session cleanup failed: ${formatErrorMessage(error)}`,
+                );
               });
             },
           );

@@ -37,7 +37,10 @@ import {
   runExclusiveSystemAgentSetupActivation,
   whenAdmittedWizardSessionSettled,
 } from "./setup-admission.js";
-import { retireAndDisposeSystemAgentSessions } from "./system-agent-session-lifecycle.js";
+import {
+  disposeSystemAgentSessionsForOwner,
+  retireAndDisposeSystemAgentSessions,
+} from "./system-agent-session-lifecycle.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -1375,6 +1378,83 @@ describe("openclaw.chat", () => {
     expect(sessions.size).toBe(8);
     expect(sessions.has("oldest")).toBe(true);
     expect(sessions.has("disconnected")).toBe(false);
+  });
+
+  it("publishes a replacement before awaiting evicted-session cleanup", async () => {
+    const evictionStarted = createDeferred();
+    const releaseEviction = createDeferred();
+    const oldest = seededSession({ lastUsedAt: 0 });
+    const disposeOldest = vi.spyOn(oldest.engine, "dispose").mockImplementation(async () => {
+      evictionStarted.resolve();
+      await releaseEviction.promise;
+    });
+    const sessions = new Map<string, SystemAgentChatSession>([["oldest", oldest]]);
+    for (let index = 1; index < 8; index += 1) {
+      sessions.set(`existing-${index}`, seededSession({ lastUsedAt: index }));
+    }
+    stubEngineOverview();
+    const isConnectionActive = vi.fn(() => true);
+    const context = makeContext(sessions);
+    context.isConnectionActive = isConnectionActive;
+    const client = {
+      connId: "conn-replacement",
+      connect: { caps: [] },
+    } as unknown as GatewayClient;
+    const { calls, respond } = makeRespond();
+
+    const pending = systemAgentHandler("openclaw.chat")({
+      params: { sessionId: "replacement" },
+      client,
+      context,
+      respond,
+    } as never);
+    await evictionStarted.promise;
+    const replacement = sessions.get("replacement");
+    expect(sessions.size).toBe(8);
+    expect(sessions.has("oldest")).toBe(false);
+    const disposeReplacement = replacement ? vi.spyOn(replacement.engine, "dispose") : undefined;
+    isConnectionActive.mockReturnValue(false);
+    const disconnect = disposeSystemAgentSessionsForOwner({
+      sessions,
+      ownerKey: "connection:conn-replacement",
+    });
+    releaseEviction.resolve();
+    await Promise.all([pending, disconnect]);
+
+    expect(replacement).toBeDefined();
+    expect(disposeOldest).toHaveBeenCalledOnce();
+    expect(disposeReplacement).toHaveBeenCalledOnce();
+    expect(calls).toEqual([]);
+    expect(sessions.size).toBe(7);
+    expect(sessions.has("oldest")).toBe(false);
+    expect(sessions.has("replacement")).toBe(false);
+  });
+
+  it("keeps a replacement committed when displaced-session cleanup fails", async () => {
+    const cleanupError = new Error("old session cleanup failed");
+    const oldest = seededSession({ lastUsedAt: 0 });
+    const disposeOldest = vi.spyOn(oldest.engine, "dispose").mockRejectedValueOnce(cleanupError);
+    const sessions = new Map<string, SystemAgentChatSession>([["oldest", oldest]]);
+    for (let index = 1; index < 8; index += 1) {
+      sessions.set(`existing-${index}`, seededSession({ lastUsedAt: index }));
+    }
+    stubEngineOverview();
+    const warn = vi.fn();
+    const context = makeContext(sessions);
+    context.logGateway = { warn } as unknown as GatewayRequestContext["logGateway"];
+
+    await expect(callChat(context, { sessionId: "replacement" })).resolves.toMatchObject({
+      ok: true,
+    });
+    await waitOneTask();
+
+    expect(disposeOldest).toHaveBeenCalledOnce();
+    expect(sessions.size).toBe(8);
+    expect(sessions.has("oldest")).toBe(false);
+    expect(sessions.has("replacement")).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/displaced-session cleanup failed:.*old session cleanup failed/),
+    );
   });
 
   it("keeps the session map bounded during concurrent unique initialization", async () => {
