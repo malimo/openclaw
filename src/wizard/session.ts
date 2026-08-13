@@ -462,9 +462,6 @@ export class WizardSession {
       }
       throw new Error("wizard: no pending step");
     }
-    if (this.currentStep?.id === stepId && this.currentStep.type === "qr") {
-      throw new Error("wizard: QR steps settle through their presentation owner");
-    }
     const normalizedValue = pending.text ? normalizeTextAnswer(value) : value;
     if (pending.text && normalizedValue === undefined) {
       return "wizard: text answer must be a scalar value";

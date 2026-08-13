@@ -67,6 +67,9 @@ describe("SystemAgentChatEngine wizard", () => {
     expect(prompt.text).not.toContain("Say `cancel`");
     const stepId = expectDefined(prompt.step, "QR step").id;
 
+    const guidance = await engine.handle("continue");
+    expect(guidance.text).toContain("Setup continues automatically");
+    expect(guidance.step?.id).toBe(stepId);
     await expect(engine.answerWizard({ stepId })).rejects.toThrow(
       "QR setup continues automatically",
     );
