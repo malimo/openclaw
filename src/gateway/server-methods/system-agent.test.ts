@@ -1331,6 +1331,52 @@ describe("openclaw.chat", () => {
     expect(systemAgentLane().activeCount).toBe(0);
   });
 
+  it("does not evict a live session for a disconnected initializer", async () => {
+    const verificationStarted = createDeferred();
+    const releaseVerification = createDeferred();
+    inferenceFallbackMocks.verify.mockImplementationOnce(async () => {
+      verificationStarted.resolve();
+      await releaseVerification.promise;
+      return {
+        ok: true,
+        modelRef: "openai/gpt-5.5",
+        latencyMs: 10,
+        binding: requireVerifiedInferenceFixture(),
+      };
+    });
+    stubEngineOverview();
+    const oldest = seededSession({ lastUsedAt: 0 });
+    const disposeOldest = vi.spyOn(oldest.engine, "dispose");
+    const sessions = new Map<string, SystemAgentChatSession>([["oldest", oldest]]);
+    for (let index = 1; index < 8; index += 1) {
+      sessions.set(`existing-${index}`, seededSession({ lastUsedAt: index }));
+    }
+    const isConnectionActive = vi.fn(() => true);
+    const context = makeContext(sessions);
+    context.isConnectionActive = isConnectionActive;
+    const client = {
+      connId: "conn-initializing",
+      connect: { caps: [] },
+    } as unknown as GatewayClient;
+
+    const pending = callChat(context, { sessionId: "disconnected" }, client);
+    await verificationStarted.promise;
+    isConnectionActive.mockReturnValue(false);
+    releaseVerification.resolve();
+
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        details: { code: "system_agent_session_invalidated" },
+      },
+    });
+    expect(disposeOldest).not.toHaveBeenCalled();
+    expect(sessions.size).toBe(8);
+    expect(sessions.has("oldest")).toBe(true);
+    expect(sessions.has("disconnected")).toBe(false);
+  });
+
   it("keeps the session map bounded during concurrent unique initialization", async () => {
     const evictionStarted = createDeferred();
     const releaseEviction = createDeferred();
