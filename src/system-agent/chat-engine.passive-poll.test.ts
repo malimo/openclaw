@@ -218,4 +218,53 @@ describe("SystemAgentChatEngine passive QR polling", () => {
     ).toHaveLength(1);
     await engine.dispose();
   });
+
+  it("expires a dropped terminal reply after a later ordinary turn", async () => {
+    const owner = createDeferred();
+    const runnerFinished = createDeferred();
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => ({ text: "Everything is healthy." }),
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      supportsQrCode: true,
+      runChannelSetupWizard: async (_channel, prompter) => {
+        await prompter.qrCode?.({
+          title: "Link a device",
+          message: "Scan this QR code and approve the device.",
+          text: QR_TEXT,
+          dismissed: owner.promise,
+        });
+        runnerFinished.resolve();
+      },
+    });
+
+    try {
+      const prompt = await engine.handle("connect telegram");
+      const stepId = expectDefined(prompt.step, "QR step").id;
+      owner.resolve();
+      await runnerFinished.promise;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      await engine.pollStep(stepId);
+      await engine.resolveOperatorApproval(null, "queue-drain");
+      const terminal = await engine.pollStep(stepId);
+      expect(terminal).not.toHaveProperty("step");
+      expect(terminal.wizardSettling).not.toBe(true);
+      expect(terminal.text).toContain("is configured");
+      await expect(engine.handle("How is this machine doing?")).resolves.toMatchObject({
+        text: "Everything is healthy.",
+      });
+
+      await expect(engine.pollStep(stepId)).rejects.toThrow("no longer active");
+      expect(engine.historySince(0).slice(-3)).toEqual([
+        { role: "assistant", text: terminal.text },
+        { role: "user", text: "How is this machine doing?" },
+        { role: "assistant", text: "Everything is healthy." },
+      ]);
+    } finally {
+      owner.resolve();
+      await engine.dispose();
+    }
+  });
 });

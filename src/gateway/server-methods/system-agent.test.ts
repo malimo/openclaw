@@ -37,6 +37,7 @@ import {
   runExclusiveSystemAgentSetupActivation,
   whenAdmittedWizardSessionSettled,
 } from "./setup-admission.js";
+import { makeDelayedTerminalQrEngine } from "./system-agent-qr.test-support.js";
 import {
   disposeSystemAgentSessionsForOwner,
   retireAndDisposeSystemAgentSessions,
@@ -840,52 +841,21 @@ describe("openclaw.chat", () => {
   });
 
   it("persists a delayed terminal QR reply once and replays it after dropped delivery", async () => {
-    const ownerSettled = createDeferred();
-    const runnerFinished = createDeferred();
-    const auditStarted = createDeferred();
-    const releaseAudit = createDeferred();
-    const auditFinished = createDeferred();
-    const engine = new SystemAgentChatEngine(
-      {
-        verifiedInference: requireVerifiedInferenceFixture(),
-        deps: requireVerifiedInferenceDeps(),
-        supportsQrCode: true,
-      },
-      {
-        wizardDependencies: {
-          runChannelSetupWizard: async (_channel, prompter) => {
-            await prompter.qrCode?.({
-              title: "Link a device",
-              message: "Scan this QR code.",
-              text: "https://example.test/pair",
-              dismissed: ownerSettled.promise,
-            });
-            runnerFinished.resolve();
-          },
-          appendAuditEntry: async () => {
-            auditStarted.resolve();
-            await releaseAudit.promise;
-            auditFinished.resolve();
-            return "audit-entry";
-          },
-        },
-      },
-    );
-    const prompt = await engine.handle("connect telegram");
-    const stepId = expectDefined(prompt.step?.id, "QR step id");
+    const delayed = await makeDelayedTerminalQrEngine({
+      verifiedInference: requireVerifiedInferenceFixture(),
+      deps: requireVerifiedInferenceDeps(),
+    });
+    const { engine, stepId } = delayed;
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
     const context = makeContext(sessions);
 
-    ownerSettled.resolve();
-    await runnerFinished.promise;
+    await delayed.settleOwner();
     const settling = await callChat(context, { sessionId: "s1", pollStepId: stepId });
     expect(settling.payload).toMatchObject({ wizardSettling: true });
-    await auditStarted.promise;
+    await delayed.auditStarted;
     expect(transcriptStoreMocks.appendTranscriptTurn).not.toHaveBeenCalled();
 
-    releaseAudit.resolve();
-    await auditFinished.promise;
-    await engine.resolveOperatorApproval(null, "queue-drain");
+    await delayed.releaseTerminal();
     await systemAgentHandler("openclaw.chat")({
       params: { sessionId: "s1", pollStepId: stepId },
       respond: () => undefined,
@@ -929,6 +899,42 @@ describe("openclaw.chat", () => {
         ([turn]) => turn.role === "assistant" && turn.text === terminalText,
       ),
     ).toHaveLength(1);
+  });
+
+  it("invalidates a delayed terminal QR reply after a later ordinary turn", async () => {
+    const delayed = await makeDelayedTerminalQrEngine({
+      verifiedInference: requireVerifiedInferenceFixture(),
+      deps: requireVerifiedInferenceDeps(),
+    });
+    const { engine, stepId } = delayed;
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+    const context = makeContext(sessions);
+
+    await delayed.settleOwner();
+    const settling = await callChat(context, { sessionId: "s1", pollStepId: stepId });
+    expect(settling.payload).toMatchObject({ wizardSettling: true });
+    await delayed.auditStarted;
+
+    await delayed.releaseTerminal();
+    const ordinary = await callChat(context, {
+      sessionId: "s1",
+      message: "How is this machine doing?",
+    });
+    expect(ordinary.payload).toMatchObject({ reply: "Everything is healthy." });
+
+    await expect(callChat(context, { sessionId: "s1", pollStepId: stepId })).resolves.toMatchObject(
+      {
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          details: { code: "system_agent_session_invalidated" },
+        },
+      },
+    );
+    expect(transcriptStoreMocks.appendTranscriptTurn.mock.calls.map(([turn]) => turn)).toEqual([
+      expect.objectContaining({ role: "user", text: "How is this machine doing?" }),
+      expect.objectContaining({ role: "assistant", text: "Everything is healthy." }),
+    ]);
   });
 
   it("keeps a dropped QR follow-up replayable through ninth-session admission", async () => {

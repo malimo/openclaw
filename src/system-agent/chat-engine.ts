@@ -360,7 +360,9 @@ export class SystemAgentChatEngine {
   private completeTurn(reply: SystemAgentChatReply, userHistoryText: string): SystemAgentChatReply {
     const completed = this.wizard.decorateReply(reply);
     for (const [pollStepId, retained] of this.retainedPollReplies) {
-      if (retained.reply.step?.id !== completed.step?.id) {
+      // A terminal reply has no step identity and is recoverable only until the
+      // next accepted turn advances this session's transcript.
+      if (retained.reply.step === undefined || retained.reply.step.id !== completed.step?.id) {
         this.retainedPollReplies.delete(pollStepId);
       }
     }
