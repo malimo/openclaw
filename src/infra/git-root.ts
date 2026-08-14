@@ -40,7 +40,7 @@ export function findGitRoot(startDir: string, opts: { maxDepth?: number } = {}):
   return walkUpFrom(startDir, opts, (repoRoot) => (hasGitMarker(repoRoot) ? repoRoot : null));
 }
 
-function resolveGitDirFromMarker(repoRoot: string): string | null {
+export function resolveGitDirFromMarker(repoRoot: string): string | null {
   const gitPath = path.join(repoRoot, ".git");
   try {
     const stat = fs.statSync(gitPath);
@@ -55,7 +55,8 @@ function resolveGitDirFromMarker(repoRoot: string): string | null {
     if (!match?.[1]) {
       return null;
     }
-    return path.resolve(repoRoot, match[1].trim());
+    const gitDir = path.resolve(repoRoot, match[1].trim());
+    return fs.statSync(gitDir).isDirectory() ? gitDir : null;
   } catch {
     return null;
   }
