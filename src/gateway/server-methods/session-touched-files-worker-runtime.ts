@@ -1,5 +1,7 @@
+import crypto from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { releaseOpenClawAgentDatabaseLeasesByNamespace } from "../../state/openclaw-agent-db-lease.js";
 import type { SessionTranscriptReadScope } from "../session-transcript-readers.js";
 import type { SessionTouchedFile } from "./session-touched-files.js";
 import type {
@@ -17,6 +19,8 @@ type PendingRequest = {
 };
 
 let worker: Worker | undefined;
+let workerLeaseNamespace: string | undefined;
+const workerLeaseEnvironments = new Map<string, NodeJS.ProcessEnv | undefined>();
 let closing: Promise<void> | undefined;
 let nextRequestId = 1;
 const pending = new Map<number, PendingRequest>();
@@ -35,18 +39,38 @@ function resolveSourceWorkerExecArgv(): string[] {
   return ["--import", `data:text/javascript,${encodeURIComponent(registerTsx)}`];
 }
 
-async function stopWorker(error: Error): Promise<void> {
+async function stopWorker(error: Error): Promise<Error | undefined> {
   const active = worker;
+  const leaseNamespace = workerLeaseNamespace;
+  const leaseEnvironments = [...workerLeaseEnvironments.values()];
   worker = undefined;
+  workerLeaseNamespace = undefined;
+  workerLeaseEnvironments.clear();
   active?.removeAllListeners();
-  for (const request of pending.values()) {
+  const stoppedRequests = [...pending.values()];
+  for (const request of stoppedRequests) {
     clearTimeout(request.timeout);
-    request.reject(error);
   }
   pending.clear();
   if (active) {
     await active.terminate();
   }
+  let cleanupError: Error | undefined;
+  if (leaseNamespace) {
+    try {
+      for (const env of leaseEnvironments) {
+        releaseOpenClawAgentDatabaseLeasesByNamespace(leaseNamespace, { env });
+      }
+    } catch (cause) {
+      cleanupError = new Error("failed to release terminated session worker database leases", {
+        cause,
+      });
+    }
+  }
+  for (const request of stoppedRequests) {
+    request.reject(cleanupError ?? error);
+  }
+  return cleanupError;
 }
 
 function ensureWorker(): Worker {
@@ -54,10 +78,11 @@ function ensureWorker(): Worker {
     return worker;
   }
   const resolvedUrl = workerUrl();
-  const active = new Worker(
-    resolvedUrl,
-    resolvedUrl.pathname.endsWith(".ts") ? { execArgv: resolveSourceWorkerExecArgv() } : undefined,
-  );
+  const leaseNamespace = crypto.randomUUID();
+  const active = new Worker(resolvedUrl, {
+    ...(resolvedUrl.pathname.endsWith(".ts") ? { execArgv: resolveSourceWorkerExecArgv() } : {}),
+    workerData: { leaseNamespace },
+  });
   active.unref();
   active.on("message", (message: SessionTouchedFilesWorkerResult) => {
     if (message.type === "stopped") {
@@ -84,6 +109,7 @@ function ensureWorker(): Worker {
     }
   });
   worker = active;
+  workerLeaseNamespace = leaseNamespace;
   return active;
 }
 
@@ -95,6 +121,8 @@ export async function loadSessionTouchedFilesInWorker(
   return new Promise((resolve, reject) => {
     const requestId = nextRequestId++;
     const active = ensureWorker();
+    const stateDirectory = scope.env?.OPENCLAW_STATE_DIR ?? "";
+    workerLeaseEnvironments.set(stateDirectory, scope.env);
     const timeout = setTimeout(() => {
       if (!pending.has(requestId)) {
         return;
@@ -121,7 +149,7 @@ export async function closeSessionTouchedFilesWorker(): Promise<void> {
   if (!active) {
     return;
   }
-  closing = new Promise<void>((resolve) => {
+  closing = new Promise<void>((resolve, reject) => {
     let settled = false;
     const finish = async () => {
       if (settled) {
@@ -131,7 +159,11 @@ export async function closeSessionTouchedFilesWorker(): Promise<void> {
       clearTimeout(timeout);
       active.removeListener("message", onMessage);
       if (worker === active) {
-        await stopWorker(new Error("session touched-files worker closed"));
+        const cleanupError = await stopWorker(new Error("session touched-files worker closed"));
+        if (cleanupError) {
+          reject(cleanupError);
+          return;
+        }
       }
       resolve();
     };
@@ -148,4 +180,11 @@ export async function closeSessionTouchedFilesWorker(): Promise<void> {
     closing = undefined;
   });
   return await closing;
+}
+
+export async function terminateSessionTouchedFilesWorkerForTest(): Promise<void> {
+  const cleanupError = await stopWorker(new Error("session touched-files worker test termination"));
+  if (cleanupError) {
+    throw cleanupError;
+  }
 }

@@ -25,13 +25,16 @@ export function claimOpenClawAgentDatabaseLease(params: {
   agentId: string;
   path: string;
   env?: NodeJS.ProcessEnv;
+  leaseNamespace?: string;
 }): string {
   const agentId = normalizeAgentId(params.agentId);
   const deletionFence = prepareAgentDeletionPathFence(
     { agentId, path: params.path },
     { env: params.env },
   );
-  const leaseId = crypto.randomUUID();
+  const leaseId = params.leaseNamespace
+    ? `${normalizeLeaseNamespace(params.leaseNamespace)}:${crypto.randomUUID()}`
+    : crypto.randomUUID();
   const ownerStartTime = getFileLockProcessStartTime(process.pid);
   runOpenClawStateWriteTransaction(
     (database) => {
@@ -58,6 +61,33 @@ export function claimOpenClawAgentDatabaseLease(params: {
     { env: params.env },
   );
   return leaseId;
+}
+
+function normalizeLeaseNamespace(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/u.test(normalized)) {
+    throw new Error("agent database lease namespace must be a UUID");
+  }
+  return normalized;
+}
+
+/** Release only leases owned by one terminated worker thread in this process. */
+export function releaseOpenClawAgentDatabaseLeasesByNamespace(
+  leaseNamespace: string,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  const prefix = `${normalizeLeaseNamespace(leaseNamespace)}:`;
+  runOpenClawStateWriteTransaction((database) => {
+    ensureAgentDatabaseLeaseSchema(database.db);
+    const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .deleteFrom("agent_database_leases")
+        .where("owner_pid", "=", process.pid)
+        .where("lease_id", "like", `${prefix}%`),
+    );
+  }, options);
 }
 
 export function releaseOpenClawAgentDatabaseLease(

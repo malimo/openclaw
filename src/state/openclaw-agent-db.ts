@@ -2,6 +2,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { isMainThread } from "node:worker_threads";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
@@ -124,6 +125,21 @@ const validatedAgentDatabasePaths = new Map<string, string>();
 const terminalOpenLatch = createSqliteTerminalOpenLatch({
   closeByPath: closeOpenClawAgentDatabaseByPath,
 });
+let agentDatabaseLeaseNamespace: string | undefined;
+
+/** Assign a cleanup namespace before a worker thread opens any agent database. */
+export function configureOpenClawAgentDatabaseLeaseNamespace(namespace: string): void {
+  if (isMainThread) {
+    throw new Error("agent database lease namespaces are reserved for worker threads");
+  }
+  if (cachedDatabases.size > 0) {
+    throw new Error("agent database lease namespace must be configured before opening a database");
+  }
+  if (agentDatabaseLeaseNamespace && agentDatabaseLeaseNamespace !== namespace) {
+    throw new Error("agent database lease namespace is already configured");
+  }
+  agentDatabaseLeaseNamespace = namespace;
+}
 
 /** Reconfirm an advisory worker failure on the live owner connection. */
 export function confirmOpenClawAgentDatabaseIntegrity(
@@ -303,6 +319,7 @@ export function openOpenClawAgentDatabase(
     agentId,
     path: pathname,
     ...(options.env ? { env: options.env } : {}),
+    ...(agentDatabaseLeaseNamespace ? { leaseNamespace: agentDatabaseLeaseNamespace } : {}),
   });
   const openStartedAt = Date.now();
   let openedDb: DatabaseSync | undefined;

@@ -1,5 +1,8 @@
-import { parentPort } from "node:worker_threads";
-import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db.js";
+import { parentPort, workerData } from "node:worker_threads";
+import {
+  closeOpenClawAgentDatabases,
+  configureOpenClawAgentDatabaseLeaseNamespace,
+} from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptReadScope } from "../session-transcript-readers.js";
 import { loadSessionTouchedFilesInline, type SessionTouchedFile } from "./session-touched-files.js";
 
@@ -40,6 +43,16 @@ async function handleRequest(
 }
 
 if (parentPort) {
+  const data: unknown = workerData;
+  if (
+    !data ||
+    typeof data !== "object" ||
+    !("leaseNamespace" in data) ||
+    typeof data.leaseNamespace !== "string"
+  ) {
+    throw new Error("session touched-files worker requires a lease namespace");
+  }
+  configureOpenClawAgentDatabaseLeaseNamespace(data.leaseNamespace);
   const port = parentPort;
   const inFlight = new Set<Promise<void>>();
   let stopping = false;

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.js";
+import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   resolveOpenClawAgentSqlitePath,
@@ -14,6 +15,7 @@ import {
 import {
   closeSessionTouchedFilesWorker,
   loadSessionTouchedFilesInWorker,
+  terminateSessionTouchedFilesWorkerForTest,
 } from "./session-touched-files-worker-runtime.js";
 
 const temporaryDirectories: string[] = [];
@@ -95,5 +97,30 @@ describe("session touched-files worker runtime", () => {
         )
         .get("main", storePath),
     ).toEqual({ count: 1 });
+  });
+
+  it("retires only worker-owned leases after forced termination", async () => {
+    const directory = fs.mkdtempSync(
+      path.join(fs.realpathSync(os.tmpdir()), "openclaw-touched-worker-terminate-"),
+    );
+    temporaryDirectories.push(directory);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: directory };
+    openOpenClawStateDatabase({ env });
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+    const scope = {
+      agentId: "main",
+      env,
+      sessionId: "worker-terminate-session",
+      sessionKey: "agent:main:worker-terminate-session",
+    };
+
+    await appendTranscriptMessage(scope, {
+      message: { role: "assistant", content: [] },
+    });
+    await loadSessionTouchedFilesInWorker(scope, `main\0worker-terminate-session\0${storePath}`);
+    await terminateSessionTouchedFilesWorkerForTest();
+    closeOpenClawAgentDatabasesForTest();
+
+    expect(() => assertNoOpenClawAgentDatabaseLeases("main", { env })).not.toThrow();
   });
 });
