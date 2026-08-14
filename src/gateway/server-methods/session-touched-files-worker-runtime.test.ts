@@ -15,13 +15,15 @@ import {
 import {
   closeSessionTouchedFilesWorker,
   loadSessionTouchedFilesInWorker,
+  resetSessionTouchedFilesWorkerRuntimeForTest,
+  shutdownSessionTouchedFilesWorker,
   terminateSessionTouchedFilesWorkerForTest,
 } from "./session-touched-files-worker-runtime.js";
 
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
-  await closeSessionTouchedFilesWorker();
+  await resetSessionTouchedFilesWorkerRuntimeForTest();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   for (const directory of temporaryDirectories.splice(0)) {
@@ -122,5 +124,21 @@ describe("session touched-files worker runtime", () => {
     closeOpenClawAgentDatabasesForTest();
 
     expect(() => assertNoOpenClawAgentDatabaseLeases("main", { env })).not.toThrow();
+  });
+
+  it("rejects worker recreation after Gateway shutdown starts", async () => {
+    const shutdown = shutdownSessionTouchedFilesWorker();
+
+    await expect(
+      loadSessionTouchedFilesInWorker(
+        {
+          agentId: "main",
+          sessionId: "late-session",
+          sessionKey: "agent:main:late-session",
+        },
+        "main\0late-session",
+      ),
+    ).rejects.toThrow("worker is shutting down");
+    await shutdown;
   });
 });

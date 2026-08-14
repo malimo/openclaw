@@ -22,6 +22,7 @@ let worker: Worker | undefined;
 let workerLeaseNamespace: string | undefined;
 const workerLeaseEnvironments = new Map<string, NodeJS.ProcessEnv | undefined>();
 let closing: Promise<void> | undefined;
+let acceptingRequests = true;
 let nextRequestId = 1;
 const pending = new Map<number, PendingRequest>();
 
@@ -117,7 +118,13 @@ export async function loadSessionTouchedFilesInWorker(
   scope: SessionTranscriptReadScope,
   cacheKey: string,
 ): Promise<SessionTouchedFile[]> {
+  if (!acceptingRequests) {
+    throw new Error("session touched-files worker is shutting down");
+  }
   await closing;
+  if (!acceptingRequests) {
+    throw new Error("session touched-files worker is shutting down");
+  }
   return new Promise((resolve, reject) => {
     const requestId = nextRequestId++;
     const active = ensureWorker();
@@ -182,9 +189,19 @@ export async function closeSessionTouchedFilesWorker(): Promise<void> {
   return await closing;
 }
 
+export async function shutdownSessionTouchedFilesWorker(): Promise<void> {
+  acceptingRequests = false;
+  await closeSessionTouchedFilesWorker();
+}
+
 export async function terminateSessionTouchedFilesWorkerForTest(): Promise<void> {
   const cleanupError = await stopWorker(new Error("session touched-files worker test termination"));
   if (cleanupError) {
     throw cleanupError;
   }
+}
+
+export async function resetSessionTouchedFilesWorkerRuntimeForTest(): Promise<void> {
+  await closeSessionTouchedFilesWorker();
+  acceptingRequests = true;
 }

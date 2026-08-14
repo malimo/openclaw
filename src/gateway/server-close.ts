@@ -37,6 +37,7 @@ import {
   type ChatRunState,
 } from "./server-chat-state.js";
 import type { MediaCleanupStopResult } from "./server-media-cleanup-lifecycle.js";
+import { shutdownSessionTouchedFilesWorker } from "./server-methods/session-touched-files-worker-runtime.js";
 import { clearSessionTypingState } from "./server-methods/session-typing-state.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
@@ -863,6 +864,11 @@ export function createGatewayCloseHandler(
       await shutdownStep("code-mode-runs", () => params.disposeAllCodeModeRuns(), warnings);
       await shutdownStep("agent-harnesses", () => disposeRegisteredAgentHarnesses(), warnings);
       await shutdownStep("ai-session-resources", () => cleanupSessionResources(), warnings);
+      await shutdownStep(
+        "session-touched-files-worker",
+        shutdownSessionTouchedFilesWorker,
+        warnings,
+      );
       await shutdownStep(
         "provider-transport-dispatchers",
         () => params.closeProviderTransportDispatcherPool(),

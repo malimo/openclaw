@@ -318,6 +318,13 @@ function loadWorkspace(
     }
     return;
   }
+  if (workspace.statusLoading) {
+    // A full workspace response supersedes its older collapsed-status probe.
+    // Invalidate that request before it can overwrite newer checkout state.
+    workspace.statusRequestId += 1;
+    workspace.statusLoading = false;
+    workspace.pendingStatusReload = false;
+  }
   const requestId = workspace.requestId + 1;
   workspace.requestId = requestId;
   workspace.loading = true;
