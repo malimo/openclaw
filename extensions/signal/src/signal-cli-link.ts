@@ -106,6 +106,12 @@ export async function linkSignalCliAccount(params: {
     }
     const trimmed = line.trim();
     if (!linkUriSeen && trimmed.startsWith(SIGNAL_LINK_URI_PREFIX)) {
+      // Preserved-line callbacks run before the command runner accounts aggregate output bytes.
+      // Enforce the same bound here so dependency output cannot reach QR presentation unbounded.
+      if (Buffer.byteLength(trimmed, "utf8") > SIGNAL_CLI_LINK_STDOUT_LIMIT_BYTES) {
+        stopWithError("signal-cli returned an oversized device-link URI.");
+        return;
+      }
       linkUriSeen = true;
       displayPromise = Promise.resolve()
         .then(

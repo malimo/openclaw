@@ -329,6 +329,35 @@ describe("linkSignalCliAccount", () => {
     expect(commandOptions().terminateOnOutputLimit).toEqual({ stdout: true });
   });
 
+  it("rejects an oversized device-link URI before presentation", async () => {
+    const command = createDeferredCommand();
+    const onLinkUri = vi.fn(async () => undefined);
+    const resultPromise = linkSignalCliAccount({
+      cliPath: "signal-cli",
+      onLinkUri,
+    });
+
+    emitStdoutLine(`sgnl://linkdevice?uuid=${"x".repeat(8 * 1024)}&pub_key=test`);
+    await Promise.resolve();
+    command.resolve(
+      commandResult({
+        code: null,
+        signal: "SIGTERM",
+        killed: true,
+        termination: "signal",
+        outputLimitExceeded: true,
+      }),
+    );
+
+    const result = await resultPromise;
+    expect(onLinkUri).not.toHaveBeenCalled();
+    expect(commandOptions().signal.aborted).toBe(true);
+    expect(result).toEqual({
+      ok: false,
+      error: "signal-cli returned an oversized device-link URI.",
+    });
+  });
+
   it("rejects a zero exit after presentation failure terminates signal-cli", async () => {
     const command = createDeferredCommand();
     const presentationFailure = linkSignalCliAccount({
