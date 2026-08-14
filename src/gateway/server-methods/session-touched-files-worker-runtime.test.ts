@@ -13,6 +13,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import {
+  acquireSessionTouchedFilesWorkerForGateway,
   closeSessionTouchedFilesWorker,
   loadSessionTouchedFilesInWorker,
   resetSessionTouchedFilesWorkerRuntimeForTest,
@@ -140,5 +141,43 @@ describe("session touched-files worker runtime", () => {
       ),
     ).rejects.toThrow("worker is shutting down");
     await shutdown;
+  });
+
+  it("re-enables worker admission for a restarted Gateway", async () => {
+    const directory = fs.mkdtempSync(
+      path.join(fs.realpathSync(os.tmpdir()), "openclaw-touched-worker-restart-"),
+    );
+    temporaryDirectories.push(directory);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: directory };
+    openOpenClawStateDatabase({ env });
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+    const restartedScope = {
+      agentId: "main",
+      env,
+      sessionId: "restarted-session",
+      sessionKey: "agent:main:restarted-session",
+    };
+    await appendTranscriptMessage(restartedScope, {
+      message: { role: "assistant", content: [] },
+    });
+    const closeFirstGateway = acquireSessionTouchedFilesWorkerForGateway();
+    await closeFirstGateway();
+
+    await expect(
+      loadSessionTouchedFilesInWorker(
+        {
+          agentId: "main",
+          sessionId: "stopped-session",
+          sessionKey: "agent:main:stopped-session",
+        },
+        "main\0stopped-session",
+      ),
+    ).rejects.toThrow("worker is shutting down");
+
+    const closeRestartedGateway = acquireSessionTouchedFilesWorkerForGateway();
+    await expect(
+      loadSessionTouchedFilesInWorker(restartedScope, `main\0restarted-session\0${storePath}`),
+    ).resolves.toEqual([]);
+    await closeRestartedGateway();
   });
 });

@@ -23,6 +23,7 @@ import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState } from "./server-live-state.js";
+import { acquireSessionTouchedFilesWorkerForGateway } from "./server-methods/session-touched-files-worker-runtime.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewayCloseOptions } from "./server-public.js";
 import type { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
@@ -488,6 +489,7 @@ export async function prepareGatewayLifecycle(params: {
       throw failure.reason;
     }
   };
+  let shutdownSessionTouchedFilesWorker = async () => {};
   const createCloseHandler = () => async (optsValue?: GatewayCloseOptions) => {
     const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
     const transport = transportBridge.current();
@@ -559,6 +561,7 @@ export async function prepareGatewayLifecycle(params: {
       stopGmailWatcher: shutdownRuntime.stopGmailWatcher,
       disposeAllCodeModeRuns: shutdownRuntime.disposeAllCodeModeRuns,
       closeProviderTransportDispatcherPool: shutdownRuntime.closeProviderTransportDispatcherPool,
+      shutdownSessionTouchedFilesWorker,
     })(optsValue);
   };
   let clearFallbackGatewayContextForServer = () => {};
@@ -610,6 +613,8 @@ export async function prepareGatewayLifecycle(params: {
   if (diagnosticsEnabled) {
     diagnosticHeartbeatResident.start();
   }
+
+  shutdownSessionTouchedFilesWorker = acquireSessionTouchedFilesWorkerForGateway();
 
   return {
     ...runtime,

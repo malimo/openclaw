@@ -73,6 +73,7 @@ type SessionWorkspaceState = {
   browserSearch: string;
   browserSearchTimer: ReturnType<typeof globalThis.setTimeout> | null;
   collapsed: boolean;
+  checkoutRequestId: number;
   dock: ChatWorkspaceDock;
   error: string | null;
   gitCheckout: boolean | null;
@@ -158,6 +159,7 @@ function getWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
     browserSearch: "",
     browserSearchTimer: null,
     collapsed: true,
+    checkoutRequestId: 0,
     // Dock preference is app-wide, seeded from the host's loaded settings;
     // per-session state just carries it forward.
     dock: current?.dock ?? normalizeChatWorkspaceDock(state.settings?.chatWorkspaceDock),
@@ -326,7 +328,9 @@ function loadWorkspace(
     workspace.pendingStatusReload = false;
   }
   const requestId = workspace.requestId + 1;
+  const checkoutRequestId = workspace.checkoutRequestId + 1;
   workspace.requestId = requestId;
+  workspace.checkoutRequestId = checkoutRequestId;
   workspace.loading = true;
   workspace.error = null;
   if (force) {
@@ -357,12 +361,15 @@ function loadWorkspace(
       const fileItems = files?.files ?? [];
       const artifactItems = artifacts?.artifacts ?? [];
       const browserItems = files?.browser?.entries ?? [];
-      current.gitCheckout = files?.gitCheckout ?? null;
-      current.statusLoaded = true;
+      if (current.checkoutRequestId === checkoutRequestId) {
+        current.gitCheckout = files?.gitCheckout ?? null;
+        current.statusLoaded = true;
+      }
+      const gitCheckout = current.gitCheckout;
       current.list = {
         sessionKey,
         ...(files?.root ? { root: files.root } : {}),
-        ...(typeof files?.gitCheckout === "boolean" ? { gitCheckout: files.gitCheckout } : {}),
+        ...(typeof gitCheckout === "boolean" ? { gitCheckout } : {}),
         files: fileItems,
         ...(files?.browser ? { browser: files.browser } : {}),
         artifacts: artifactItems,
@@ -407,7 +414,9 @@ function loadWorkspaceStatus(
     return;
   }
   const requestId = workspace.statusRequestId + 1;
+  const checkoutRequestId = workspace.checkoutRequestId + 1;
   workspace.statusRequestId = requestId;
+  workspace.checkoutRequestId = checkoutRequestId;
   workspace.statusLoading = true;
   workspace.pendingStatusReload = false;
   const sessionKey = state.sessionKey;
@@ -419,7 +428,11 @@ function loadWorkspaceStatus(
     })
     .then((result) => {
       const current = currentWorkspaceState(state);
-      if (current !== workspace || current.statusRequestId !== requestId) {
+      if (
+        current !== workspace ||
+        current.statusRequestId !== requestId ||
+        current.checkoutRequestId !== checkoutRequestId
+      ) {
         return;
       }
       current.gitCheckout = result.gitCheckout ?? null;
@@ -427,7 +440,11 @@ function loadWorkspaceStatus(
     })
     .catch(() => {
       const current = currentWorkspaceState(state);
-      if (current === workspace && current.statusRequestId === requestId) {
+      if (
+        current === workspace &&
+        current.statusRequestId === requestId &&
+        current.checkoutRequestId === checkoutRequestId
+      ) {
         // The diff panel already owns unknown/not-git fallbacks. A status read
         // failure must not block the workspace rail or strand its refresh path.
         current.gitCheckout = null;

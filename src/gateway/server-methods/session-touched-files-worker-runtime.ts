@@ -23,6 +23,7 @@ let workerLeaseNamespace: string | undefined;
 const workerLeaseEnvironments = new Map<string, NodeJS.ProcessEnv | undefined>();
 let closing: Promise<void> | undefined;
 let acceptingRequests = true;
+let gatewayOwners = 0;
 let nextRequestId = 1;
 const pending = new Map<number, PendingRequest>();
 
@@ -191,7 +192,27 @@ export async function closeSessionTouchedFilesWorker(): Promise<void> {
 
 export async function shutdownSessionTouchedFilesWorker(): Promise<void> {
   acceptingRequests = false;
+  gatewayOwners = 0;
   await closeSessionTouchedFilesWorker();
+}
+
+/** Own worker admission for exactly one Gateway lifecycle. */
+export function acquireSessionTouchedFilesWorkerForGateway(): () => Promise<void> {
+  gatewayOwners += 1;
+  acceptingRequests = true;
+  let released = false;
+  return async () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    gatewayOwners = Math.max(0, gatewayOwners - 1);
+    if (gatewayOwners > 0) {
+      return;
+    }
+    acceptingRequests = false;
+    await closeSessionTouchedFilesWorker();
+  };
 }
 
 export async function terminateSessionTouchedFilesWorkerForTest(): Promise<void> {
@@ -203,5 +224,6 @@ export async function terminateSessionTouchedFilesWorkerForTest(): Promise<void>
 
 export async function resetSessionTouchedFilesWorkerRuntimeForTest(): Promise<void> {
   await closeSessionTouchedFilesWorker();
+  gatewayOwners = 0;
   acceptingRequests = true;
 }
