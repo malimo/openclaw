@@ -17,6 +17,7 @@ import type {
 
 const mocks = vi.hoisted(() => ({
   assertBindAvailable: vi.fn(async () => undefined),
+  callGateway: vi.fn(),
   probeTransport: vi.fn(
     async (): Promise<SignalTransportProbeResult> => ({ ok: true, status: 200 }),
   ),
@@ -42,6 +43,12 @@ const mocks = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
   waitForTransportReady: mocks.waitForReady,
 }));
+vi.mock("openclaw/plugin-sdk/gateway-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/gateway-runtime")>(
+    "openclaw/plugin-sdk/gateway-runtime",
+  );
+  return { ...actual, callGatewayFromCli: mocks.callGateway };
+});
 vi.mock("./daemon.js", () => ({ spawnSignalDaemon: mocks.spawnDaemon }));
 vi.mock("./setup-daemon-bind.js", () => ({
   assertSignalSetupDaemonBindAvailable: mocks.assertBindAvailable,
@@ -92,6 +99,8 @@ beforeEach(() => {
   setSignalRuntime(createPluginRuntimeMock());
   mocks.assertBindAvailable.mockReset();
   mocks.assertBindAvailable.mockResolvedValue(undefined);
+  mocks.callGateway.mockReset();
+  mocks.callGateway.mockRejectedValue(new Error("gateway unavailable"));
   mocks.probeTransport.mockReset();
   mocks.probeTransport.mockResolvedValue({ ok: true, status: 200 });
   mocks.stop.mockReset();
@@ -240,14 +249,171 @@ describe("probeManagedSignalSetup", () => {
       probeManagedSignalSetup(createParams(cfg, transport, account)),
     ).resolves.toMatchObject({
       ok: false,
-      error: expect.stringContaining("EADDRINUSE"),
+      error: expect.stringContaining("openclaw gateway stop"),
     });
+    expect(mocks.assertBindAvailable).toHaveBeenCalledOnce();
     expect(mocks.probeTransport).toHaveBeenCalledWith(
       expect.objectContaining({ nativeAccountBinding: "selected-account" }),
     );
     expect(mocks.probeTransport).not.toHaveBeenCalledWith(
       expect.objectContaining({ nativeAccountBinding: "owner-known-bound-account" }),
     );
+    expect(mocks.spawnDaemon).not.toHaveBeenCalled();
+  });
+
+  it("reuses an exact daemon owned by a separate ready Gateway process", async () => {
+    const cfg = {
+      gateway: { mode: "local" as const },
+      channels: { signal: { accounts: { work: { account, transport } } } },
+    } as OpenClawConfig;
+    mocks.probeTransport
+      .mockResolvedValueOnce({
+        ok: false,
+        failureKind: "unverifiable-single-account",
+        error: "server account cannot be verified",
+      })
+      .mockResolvedValueOnce({ ok: true, status: 200 });
+    mocks.callGateway.mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          configRevisionHash: "applied-config",
+          appliedConfigHash: "applied-config",
+          sourceConfig: cfg,
+        };
+      }
+      if (method === "channels.status") {
+        return {
+          channelAccounts: {
+            signal: [
+              {
+                accountId: "work",
+                identity: account,
+                running: true,
+                connected: true,
+                baseUrl: "http://127.0.0.1:8080",
+              },
+            ],
+          },
+        };
+      }
+      throw new Error(`unexpected Gateway method ${method}`);
+    });
+
+    await expect(
+      probeManagedSignalSetup(createParams(cfg, transport, account)),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(mocks.probeTransport).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ nativeAccountBinding: "selected-account" }),
+    );
+    expect(mocks.probeTransport).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ nativeAccountBinding: "owner-known-bound-account" }),
+    );
+    expect(mocks.callGateway.mock.calls.map(([method]) => method)).toEqual([
+      "config.get",
+      "channels.status",
+    ]);
+    expect(mocks.assertBindAvailable).not.toHaveBeenCalled();
+    expect(mocks.spawnDaemon).not.toHaveBeenCalled();
+  });
+
+  it("does not trust a Gateway owner after its exact daemon becomes unavailable", async () => {
+    const cfg = {
+      gateway: { mode: "local" as const },
+      channels: { signal: { accounts: { work: { account, transport } } } },
+    } as OpenClawConfig;
+    mocks.probeTransport
+      .mockResolvedValueOnce({
+        ok: false,
+        failureKind: "unverifiable-single-account",
+        error: "server account cannot be verified",
+      })
+      .mockResolvedValueOnce({ ok: false, error: "connection refused" });
+    mocks.callGateway.mockImplementation(async (method: string) =>
+      method === "config.get"
+        ? {
+            configRevisionHash: "applied-config",
+            appliedConfigHash: "applied-config",
+            sourceConfig: cfg,
+          }
+        : {
+            channelAccounts: {
+              signal: [
+                {
+                  accountId: "work",
+                  identity: account,
+                  running: true,
+                  connected: true,
+                  baseUrl: "http://127.0.0.1:8080",
+                },
+              ],
+            },
+          },
+    );
+
+    await expect(
+      probeManagedSignalSetup(createParams(cfg, transport, account)),
+    ).resolves.toMatchObject({ ok: false, error: "connection refused" });
+
+    expect(mocks.assertBindAvailable).not.toHaveBeenCalled();
+    expect(mocks.spawnDaemon).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "has not applied the current config",
+      configState: {
+        configRevisionHash: "saved-config",
+        appliedConfigHash: "older-config",
+      },
+      runtime: { running: true, connected: true },
+    },
+    {
+      name: "does not have a connected runtime",
+      configState: {
+        configRevisionHash: "applied-config",
+        appliedConfigHash: "applied-config",
+      },
+      runtime: { running: true, connected: false },
+    },
+  ])("does not trust the Gateway when it $name", async ({ configState, runtime }) => {
+    const cfg = {
+      gateway: { mode: "local" as const },
+      channels: { signal: { accounts: { work: { account, transport } } } },
+    } as OpenClawConfig;
+    mocks.probeTransport.mockResolvedValueOnce({
+      ok: false,
+      failureKind: "unverifiable-single-account",
+      error: "server account cannot be verified",
+    });
+    mocks.assertBindAvailable.mockRejectedValueOnce(new Error("address in use (EADDRINUSE)"));
+    mocks.callGateway.mockImplementation(async (method: string) =>
+      method === "config.get"
+        ? { ...configState, sourceConfig: cfg }
+        : {
+            channelAccounts: {
+              signal: [
+                {
+                  accountId: "work",
+                  identity: account,
+                  ...runtime,
+                  baseUrl: "http://127.0.0.1:8080",
+                },
+              ],
+            },
+          },
+    );
+
+    await expect(
+      probeManagedSignalSetup(createParams(cfg, transport, account)),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining("openclaw gateway stop"),
+    });
+
+    expect(mocks.probeTransport).toHaveBeenCalledOnce();
     expect(mocks.spawnDaemon).not.toHaveBeenCalled();
   });
 

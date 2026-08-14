@@ -1,6 +1,6 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { OpenClawConfig, WizardPrompter } from "openclaw/plugin-sdk/setup";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveSignalAccount, resolveSignalTransport } from "./accounts.js";
 import { spawnSignalDaemon } from "./daemon.js";
@@ -12,7 +12,7 @@ import {
   type SignalTransportProbeResult,
 } from "./setup-transport.js";
 import { isSignalManagedNativeConnectionUrlForBind } from "./transport-policy.js";
-import { buildSignalTransportHttpUrl } from "./transport-url.js";
+import { buildSignalTransportHttpUrl, normalizeSignalTransportUrl } from "./transport-url.js";
 
 type ResolvedManagedSignalTransport = Extract<
   ReturnType<typeof resolveSignalTransport>,
@@ -33,6 +33,101 @@ function sameManagedTransport(
     left.receiveMode === right.receiveMode &&
     left.ignoreStories === right.ignoreStories
   );
+}
+
+function hasExactAppliedGatewayConfig(params: {
+  payload: unknown;
+  accountId: string;
+  account: string;
+  resolved: ResolvedManagedSignalTransport;
+}): boolean {
+  if (
+    !isRecord(params.payload) ||
+    typeof params.payload.configRevisionHash !== "string" ||
+    params.payload.configRevisionHash !== params.payload.appliedConfigHash ||
+    !isRecord(params.payload.sourceConfig)
+  ) {
+    return false;
+  }
+  const gatewayAccount = resolveSignalAccount({
+    cfg: params.payload.sourceConfig as OpenClawConfig,
+    accountId: params.accountId,
+  });
+  return (
+    normalizeOptionalString(gatewayAccount.config.account) === params.account &&
+    gatewayAccount.transport.kind === "managed-native" &&
+    sameManagedTransport(gatewayAccount.transport, params.resolved)
+  );
+}
+
+function hasReadyGatewaySignalRuntime(params: {
+  payload: unknown;
+  accountId: string;
+  account: string;
+  baseUrl: string;
+}): boolean {
+  if (!isRecord(params.payload) || !isRecord(params.payload.channelAccounts)) {
+    return false;
+  }
+  const accounts = params.payload.channelAccounts.signal;
+  if (!Array.isArray(accounts)) {
+    return false;
+  }
+  const expectedBaseUrl = normalizeSignalTransportUrl(params.baseUrl);
+  return accounts.some(
+    (entry) =>
+      isRecord(entry) &&
+      entry.accountId === params.accountId &&
+      entry.identity === params.account &&
+      entry.running === true &&
+      entry.connected === true &&
+      typeof entry.baseUrl === "string" &&
+      normalizeSignalTransportUrl(entry.baseUrl) === expectedBaseUrl,
+  );
+}
+
+async function isManagedSignalDaemonOwnedByGateway(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  account: string;
+  resolved: ResolvedManagedSignalTransport;
+  abortSignal?: AbortSignal;
+}): Promise<boolean> {
+  if (params.cfg.gateway?.mode === "remote") {
+    return false;
+  }
+  try {
+    const { callGatewayFromCli } = await import("openclaw/plugin-sdk/gateway-runtime");
+    const requestOptions = {
+      expectFinal: false,
+      progress: false,
+      ...(params.abortSignal ? { signal: params.abortSignal } : {}),
+    };
+    const appliedConfig = await callGatewayFromCli(
+      "config.get",
+      { timeout: "5000", json: true },
+      {},
+      requestOptions,
+    );
+    if (!hasExactAppliedGatewayConfig({ ...params, payload: appliedConfig })) {
+      return false;
+    }
+    const status = await callGatewayFromCli(
+      "channels.status",
+      { timeout: "5000", json: true },
+      { channel: "signal" },
+      requestOptions,
+    );
+    return hasReadyGatewaySignalRuntime({
+      payload: status,
+      accountId: params.accountId,
+      account: params.account,
+      baseUrl: params.resolved.baseUrl,
+    });
+  } catch {
+    params.abortSignal?.throwIfAborted();
+    return false;
+  }
 }
 
 export function managedSignalTransportIdentity(transport: SignalManagedNativeTransport): string {
@@ -132,6 +227,7 @@ export async function probeManagedSignalSetup(params: {
   }
   const progress = params.prompter.progress("Validating Signal setup...");
   let daemon: ReturnType<typeof spawnSignalDaemon> | undefined;
+  let unverifiableConfiguredDaemon = false;
   let result: SignalTransportProbeResult = { ok: false, error: "Signal transport probe failed." };
   try {
     const configuredAccountInfo = resolveSignalAccount({
@@ -147,7 +243,7 @@ export async function probeManagedSignalSetup(params: {
       params.reusableConfiguredTransport === managedSignalTransportIdentity(configured)
     ) {
       if (sameManagedTransport(configured, resolved)) {
-        const ownerKnown = isSignalManagedDaemonOwned({
+        let ownerKnown = isSignalManagedDaemonOwned({
           accountId: configuredAccountInfo.accountId,
           account: params.account,
           cliPath: resolved.cliPath,
@@ -164,16 +260,51 @@ export async function probeManagedSignalSetup(params: {
           result = await probeSeparateConnectionUrl({ ...params, resolved });
           return result;
         }
+        if (
+          !ownerKnown &&
+          result.failureKind === "unverifiable-single-account" &&
+          (await isManagedSignalDaemonOwnedByGateway({
+            cfg: params.cfg,
+            accountId: configuredAccountInfo.accountId,
+            account: params.account,
+            resolved,
+            ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+          }))
+        ) {
+          // The Gateway is the cross-process lifecycle owner. Its applied config plus ready
+          // runtime replaces the in-process handle proof without trusting an arbitrary SSE peer.
+          ownerKnown = true;
+          result = await probeManagedBind({
+            ...params,
+            resolved,
+            accountBinding: "owner-known-bound-account",
+          });
+          if (result.ok) {
+            return await probeSeparateConnectionUrl({ ...params, resolved });
+          }
+        }
         if (ownerKnown) {
           return result;
         }
+        unverifiableConfiguredDaemon = result.failureKind === "unverifiable-single-account";
       }
     }
 
-    await assertSignalSetupDaemonBindAvailable({
-      httpHost: resolved.httpHost,
-      httpPort: resolved.httpPort,
-    });
+    try {
+      await assertSignalSetupDaemonBindAvailable({
+        httpHost: resolved.httpHost,
+        httpPort: resolved.httpPort,
+      });
+    } catch (error) {
+      if (!unverifiableConfiguredDaemon) {
+        throw error;
+      }
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `OpenClaw could not confirm ownership of the running Signal daemon. Run \`openclaw gateway stop\`, retry setup, then restart the Gateway. ${detail}`,
+        { cause: error },
+      );
+    }
     if (hasSeparateConnectionUrl({ ...params, resolved })) {
       const preexistingConnection = await probeSeparateConnectionUrl({ ...params, resolved });
       if (preexistingConnection.ok) {
