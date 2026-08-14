@@ -324,6 +324,28 @@ describe("authenticated profile avatar cache", () => {
     expect(revokeObjectURL).toHaveBeenNthCalledWith(2, imageUrls[1]);
   });
 
+  it("returns a settled burst of missing avatars to the cache limit", async () => {
+    setAvatarGatewayOrigin("https://gateway.example.test", "Bearer profile-token");
+    const finishRequests: Array<(response: Response) => void> = [];
+    const fetchAvatar = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        await new Promise<Response>((resolve) => {
+          finishRequests.push(resolve);
+        }),
+    );
+
+    const pending = Array.from({ length: 130 }, (_, index) =>
+      Promise.resolve(resolveAvatarImageUrl(`/api/users/missing-${index}/avatar`)),
+    );
+    for (const finishRequest of finishRequests) {
+      finishRequest(new Response(null, { status: 404 }));
+    }
+    await Promise.all(pending);
+
+    void resolveAvatarImageUrl("/api/users/missing-0/avatar");
+    expect(fetchAvatar).toHaveBeenCalledTimes(131);
+  });
+
   it("rejects non-image responses from the authenticated avatar endpoint", async () => {
     setAvatarGatewayOrigin("https://gateway.example.test", "Bearer profile-token");
     vi.spyOn(globalThis, "fetch").mockResolvedValue(

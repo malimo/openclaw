@@ -201,6 +201,7 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> {
         // Profile updates publish revisioned URLs, so a real upload bypasses a cached 404.
         identityAvatarCache.delete(cacheKey);
       }
+      trimIdentityAvatarCache(entry);
     }
   })();
   identityAvatarCache.set(cacheKey, entry);

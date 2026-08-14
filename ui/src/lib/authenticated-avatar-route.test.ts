@@ -43,6 +43,32 @@ it("shares a stable missing route across owners until its retry window expires",
   third.reset();
 });
 
+it("keeps a pending route when its release races with a cached miss", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+  let finishRequest: ((response: Response) => void) | undefined;
+  const fetchMock = vi.fn(
+    () =>
+      new Promise<Response>((resolve) => {
+        finishRequest = resolve;
+      }),
+  );
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+  const first = new AuthenticatedAvatarRouteLoader(vi.fn(), { cacheNotFound: true });
+  expect(first.resolve("/avatar/release-race", ["token"])).toBeNull();
+  first.reset();
+  finishRequest?.({ ok: false, status: 404 } as Response);
+  await Promise.resolve();
+  await Promise.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+
+  const second = new AuthenticatedAvatarRouteLoader(vi.fn(), { cacheNotFound: true });
+  expect(second.resolve("/avatar/release-race", ["token"])).toBeNull();
+  expect(fetchMock).toHaveBeenCalledOnce();
+  second.reset();
+});
+
 it("shares pending fetches and revokes the resolved blob on reset", async () => {
   const createObjectURL = vi.fn(() => "blob:assistant-avatar");
   const revokeObjectURL = vi.fn();

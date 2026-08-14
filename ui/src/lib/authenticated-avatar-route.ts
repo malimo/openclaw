@@ -28,6 +28,10 @@ function releaseEntry(key: string, owner: symbol) {
   if (entry.consumers.size > 0 || entry.releaseTimer !== undefined) {
     return;
   }
+  scheduleEntryRelease(key, entry);
+}
+
+function scheduleEntryRelease(key: string, entry: AvatarRouteEntry) {
   // Lit can replace one route consumer with another in a later microtask. Finalize
   // unowned routes on the next task so the shared request survives that DOM handoff.
   const releaseDelayMs = entry.notFoundUntilMs
@@ -36,6 +40,10 @@ function releaseEntry(key: string, owner: symbol) {
   entry.releaseTimer = setTimeout(() => {
     entry.releaseTimer = undefined;
     if (sharedAvatarRoutes.get(key) !== entry || entry.consumers.size > 0) {
+      return;
+    }
+    if (entry.notFoundUntilMs && Date.now() < entry.notFoundUntilMs) {
+      scheduleEntryRelease(key, entry);
       return;
     }
     sharedAvatarRoutes.delete(key);
