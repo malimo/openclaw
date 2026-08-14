@@ -25,7 +25,16 @@ const hoisted = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   readSessionTranscriptVisibleMessageDeltaCore: vi.fn(),
+  runGit: vi.fn(),
 }));
+
+vi.mock("../../agents/worktrees/git.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/worktrees/git.js")>(
+    "../../agents/worktrees/git.js",
+  );
+  hoisted.runGit.mockImplementation(actual.runGit);
+  return { ...actual, runGit: hoisted.runGit };
+});
 
 vi.mock("./open-path.js", async () => {
   const actual = await vi.importActual<typeof import("./open-path.js")>("./open-path.js");
@@ -125,6 +134,30 @@ describe("sessions.files RPC handlers", () => {
     );
     expect(checkoutPayload.gitCheckout).toBe(true);
     expect(hoisted.readSessionTranscriptVisibleMessageDeltaCore).not.toHaveBeenCalled();
+  });
+
+  it("reuses a recent positive checkout probe during rapid session loads", async () => {
+    const gitInit = await import("node:child_process").then(({ execFileSync }) =>
+      execFileSync("git", ["init", "--quiet"], { cwd: workspaceRoot }),
+    );
+    expect(gitInit).toBeInstanceOf(Buffer);
+
+    const initialPayload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.workspace.status", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(initialPayload.gitCheckout).toBe(true);
+    expect(hoisted.runGit).toHaveBeenCalledOnce();
+
+    fs.renameSync(path.join(workspaceRoot, ".git"), path.join(workspaceRoot, ".git-hidden"));
+    const cachedPayload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.workspace.status", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(cachedPayload.gitCheckout).toBe(true);
+    expect(hoisted.runGit).toHaveBeenCalledOnce();
   });
 
   it("uses the persisted fixed-store owner for a bare session workspace", async () => {

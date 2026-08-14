@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -7,7 +8,6 @@ import {
   requireGitCommandBuffer,
   requireGitCommandRaw,
 } from "../../infra/git-exec.js";
-import { isValidGitDirectory, resolveGitDirFromMarker } from "../../infra/git-root.js";
 
 export type GitResult = {
   stdout: string;
@@ -89,15 +89,15 @@ export async function listGitWorktrees(repoRoot: string): Promise<WorktreeListEn
 }
 
 /**
- * True when dir sits inside a git checkout: a .git directory or a resolvable
- * linked-worktree pointer on itself or any ancestor. This keeps UI capability
- * checks and create-preflights on the same no-subprocess discovery path.
+ * True when dir sits inside a git checkout: a .git entry on itself or any ancestor.
+ * Existence, not directory-ness, is the signal — linked worktrees keep a .git file.
+ * Mirrors `git rev-parse --show-toplevel` discovery without spawning git, so UI
+ * capability checks and create-preflights cannot diverge from the worktree service.
  */
 export function findGitCheckoutRoot(start: string): string | null {
   let current = path.resolve(start);
   for (;;) {
-    const gitDir = resolveGitDirFromMarker(current);
-    if (gitDir && isValidGitDirectory(gitDir)) {
+    if (existsSync(path.join(current, ".git"))) {
       return current;
     }
     const parent = path.dirname(current);

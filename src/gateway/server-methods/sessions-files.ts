@@ -21,9 +21,10 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessions/tools/path-utils.js";
-import { insideGitCheckout } from "../../agents/worktrees/git.js";
+import { runGit } from "../../agents/worktrees/git.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -75,6 +76,12 @@ const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 const MAX_BROWSER_ENTRIES = 250;
 const MAX_SEARCH_ENTRIES = 500;
 const MAX_SEARCH_VISITED_ENTRIES = 5_000;
+const GIT_CHECKOUT_STATUS_CACHE_MAX_ENTRIES = 128;
+const GIT_CHECKOUT_STATUS_CACHE_TTL_MS = 5_000;
+type GitCheckoutStatusCacheEntry =
+  | { expiresAtMs: number; value: true }
+  | { promise: Promise<boolean> };
+const gitCheckoutStatusCache = new Map<string, GitCheckoutStatusCacheEntry>();
 // Matches file-type's documented default buffer sample while keeping metadata
 // classification independent from the 256 KiB inline-content cap.
 const MIME_SNIFF_PREFIX_BYTES = 4_100;
@@ -556,7 +563,43 @@ async function loadGitCheckoutStatus(diffCwd: string | undefined): Promise<boole
   if (!diffCwd) {
     return undefined;
   }
-  return insideGitCheckout(diffCwd);
+  const cacheKey = path.resolve(diffCwd);
+  const cached = gitCheckoutStatusCache.get(cacheKey);
+  if (cached) {
+    if ("promise" in cached) {
+      return await cached.promise;
+    }
+    if (cached.expiresAtMs > Date.now()) {
+      gitCheckoutStatusCache.delete(cacheKey);
+      gitCheckoutStatusCache.set(cacheKey, cached);
+      return cached.value;
+    }
+    gitCheckoutStatusCache.delete(cacheKey);
+  }
+
+  const promise = (async () => {
+    try {
+      const result = await runGit(cacheKey, ["rev-parse", "--show-toplevel"]);
+      return result.code === 0 && Boolean(result.stdout.trim());
+    } catch {
+      return false;
+    }
+  })();
+  gitCheckoutStatusCache.set(cacheKey, { promise });
+  pruneMapToMaxSize(gitCheckoutStatusCache, GIT_CHECKOUT_STATUS_CACHE_MAX_ENTRIES);
+  const value = await promise;
+  const current = gitCheckoutStatusCache.get(cacheKey);
+  if (current && "promise" in current && current.promise === promise) {
+    gitCheckoutStatusCache.delete(cacheKey);
+    if (value) {
+      gitCheckoutStatusCache.set(cacheKey, {
+        expiresAtMs: Date.now() + GIT_CHECKOUT_STATUS_CACHE_TTL_MS,
+        value,
+      });
+      pruneMapToMaxSize(gitCheckoutStatusCache, GIT_CHECKOUT_STATUS_CACHE_MAX_ENTRIES);
+    }
+  }
+  return value;
 }
 
 async function buildWorkspaceStatus(params: {
