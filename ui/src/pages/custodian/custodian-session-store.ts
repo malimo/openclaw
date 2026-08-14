@@ -7,11 +7,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import {
-  canCallGatewayMethod,
-  isGatewayCapabilityAdvertised,
-  isGatewayMethodAdvertised,
-} from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayCapabilityAdvertised } from "../../lib/gateway-methods.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { pathForCustodianAgentHandoff } from "./custodian-navigation.ts";
 import { CustodianQrSession } from "./custodian-qr-session.ts";
@@ -23,6 +19,7 @@ import {
 import {
   hasCustodianUserInput,
   resetCustodianWizardState,
+  resolveCustodianChatAccess,
   resolveCustodianConfiguredInferenceState,
   resolveCustodianSessionOwnershipKey,
   type CustodianConfiguredInferenceState,
@@ -458,9 +455,7 @@ export class CustodianSessionStore {
     }
     const snapshot = context.gateway.snapshot;
     const client = snapshot.phase === "connected" ? snapshot.client : null;
-    const chatSupported =
-      client !== null && canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin");
-    const chatUnsupported = isGatewayMethodAdvertised(snapshot, "openclaw.chat") === false;
+    const chatAccess = resolveCustodianChatAccess(snapshot);
     const configuredInferenceState = resolveCustodianConfiguredInferenceState(this.context);
     const inferenceStateChanged = configuredInferenceState !== this.configuredInferenceState;
     this.configuredInferenceState = configuredInferenceState;
@@ -483,7 +478,7 @@ export class CustodianSessionStore {
       !variantChanged &&
       !clientReplaced &&
       !ownershipChanged &&
-      this.chatAvailable === (chatSupported && configuredInferenceState !== "unresolved") &&
+      this.chatAvailable === (chatAccess.supported && configuredInferenceState !== "unresolved") &&
       !inferenceStateChanged
     ) {
       return;
@@ -492,10 +487,10 @@ export class CustodianSessionStore {
     const pendingParams = this.sending && this.retryParams ? this.retryParams : null;
     [this.activeClient, this.sending, this.chatAvailable] = [client, false, false];
     this.requestEpoch += 1;
-    if (clientReplaced && !chatSupported) {
+    if (clientReplaced && !chatAccess.supported) {
       this.sessionStarted = false;
       this.abandonPendingUserTurn(pendingParams);
-      this.error = chatUnsupported ? t("custodian.unsupportedGateway") : null;
+      this.error = chatAccess.unsupported ? t("custodian.unsupportedGateway") : null;
       return;
     }
     if (client && ownershipKey === undefined) {
@@ -529,8 +524,8 @@ export class CustodianSessionStore {
     if (!client) {
       return;
     }
-    if (!chatSupported) {
-      this.error = chatUnsupported ? t("custodian.unsupportedGateway") : null;
+    if (!chatAccess.supported) {
+      this.error = chatAccess.unsupported ? t("custodian.unsupportedGateway") : null;
       return;
     }
     if (configuredInferenceState === "unresolved") {

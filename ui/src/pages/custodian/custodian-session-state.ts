@@ -1,5 +1,6 @@
 import type { SystemAgentChatParams } from "@openclaw/gateway-protocol";
 import type { ApplicationContext } from "../../app/context.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 
 export type CustodianConfiguredInferenceState = "unresolved" | "required" | "ready";
@@ -19,6 +20,16 @@ export function hasCustodianUserInput(params: SystemAgentChatParams): boolean {
     params.wizardAnswer !== undefined ||
     params.wizardCancel !== undefined
   );
+}
+
+export function resolveCustodianChatAccess(snapshot: ApplicationContext["gateway"]["snapshot"]): {
+  supported: boolean;
+  unsupported: boolean;
+} {
+  return {
+    supported: canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin"),
+    unsupported: isGatewayMethodAdvertised(snapshot, "openclaw.chat") === false,
+  };
 }
 
 export function resolveCustodianConfiguredInferenceState(
