@@ -136,27 +136,37 @@ describe("sessions.files RPC handlers", () => {
     expect(hoisted.readSessionTranscriptVisibleMessageDeltaCore).not.toHaveBeenCalled();
   });
 
-  it("reuses a recent positive checkout probe during rapid session loads", async () => {
-    const gitInit = await import("node:child_process").then(({ execFileSync }) =>
-      execFileSync("git", ["init", "--quiet"], { cwd: workspaceRoot }),
+  it("coalesces cold checkout probes and reuses the positive result", async () => {
+    let finishProbe: (result: { code: number; stderr: string; stdout: string }) => void = () => {};
+    hoisted.runGit.mockImplementationOnce(
+      async () =>
+        await new Promise((resolve) => {
+          finishProbe = resolve;
+        }),
     );
-    expect(gitInit).toBeInstanceOf(Buffer);
 
-    const initialPayload = expectOkPayload(
-      await invokeSessionFilesHandler("sessions.workspace.status", {
-        sessionKey: "agent:main:main",
-      }),
-    );
-    expect(initialPayload.gitCheckout).toBe(true);
+    const first = invokeSessionFilesHandler("sessions.workspace.status", {
+      sessionKey: "agent:main:main",
+    });
+    const second = invokeSessionFilesHandler("sessions.workspace.status", {
+      sessionKey: "agent:main:main",
+    });
     expect(hoisted.runGit).toHaveBeenCalledOnce();
 
-    fs.renameSync(path.join(workspaceRoot, ".git"), path.join(workspaceRoot, ".git-hidden"));
+    finishProbe({ code: 0, stderr: "", stdout: `${workspaceRoot}\n` });
+    const [firstPayload, secondPayload] = await Promise.all([
+      first.then(expectOkPayload),
+      second.then(expectOkPayload),
+    ]);
+    expect(firstPayload.gitCheckout).toBe(true);
+    expect(secondPayload).toEqual(firstPayload);
+
     const cachedPayload = expectOkPayload(
       await invokeSessionFilesHandler("sessions.workspace.status", {
         sessionKey: "agent:main:main",
       }),
     );
-    expect(cachedPayload.gitCheckout).toBe(true);
+    expect(cachedPayload).toEqual(firstPayload);
     expect(hoisted.runGit).toHaveBeenCalledOnce();
   });
 
