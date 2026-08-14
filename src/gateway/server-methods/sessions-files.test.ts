@@ -151,7 +151,7 @@ describe("sessions.files RPC handlers", () => {
     const second = invokeSessionFilesHandler("sessions.workspace.status", {
       sessionKey: "agent:main:main",
     });
-    expect(hoisted.runGit).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(hoisted.runGit).toHaveBeenCalledOnce());
 
     finishProbe({ code: 0, stderr: "", stdout: `${workspaceRoot}\n` });
     const [firstPayload, secondPayload] = await Promise.all([
