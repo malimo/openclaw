@@ -123,6 +123,9 @@ class WizardSessionPrompter implements WizardPrompter {
         ) {
           throw new RangeError("expiresAtMs must be a non-negative safe integer.");
         }
+        // Rendering can await while the credential owner rejects. Attach the safe sink before
+        // that await; the step-specific handler below still owns the eventual fixed error.
+        void params.dismissed.catch(() => undefined);
         const qrDataUrl = await renderQrPngDataUrlWithinLimit(
           params.text,
           QR_PNG_DATA_URL_MAX_LENGTH,

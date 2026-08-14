@@ -40,12 +40,12 @@ describe("SystemAgentChatEngine runtime", () => {
     const prompt = await engine.handle("connect telegram");
     expect(prompt.step?.type).toBe("qr");
     rejectOwner(new Error(`signal-cli link failed for ${credentialUri}`));
-    await vi.waitFor(() => expect(engine.hasPendingQrCode()).toBe(false));
 
     const stopped = await engine.handle("status");
     expect(stopped.text).toContain("setup stopped: Error: wizard: QR presentation owner failed");
     expect(stopped.text).not.toContain(credentialUri);
     expect(JSON.stringify(engine.historySince(0))).not.toContain(credentialUri);
+    expect(engine.hasPendingQrCode()).toBe(false);
   });
 
   it("fences default channel durable effects after QR cancellation", async () => {

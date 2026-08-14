@@ -319,6 +319,36 @@ describe("WizardSession", () => {
     expect(JSON.stringify(result)).not.toContain(credentialUri);
   });
 
+  test("observes QR owner rejection before awaiting the renderer", async () => {
+    let finishRendering!: (value: string) => void;
+    const rendering = new Promise<string>((resolve) => {
+      finishRendering = resolve;
+    });
+    qrImageMocks.renderQrPngDataUrlWithinLimit.mockReturnValueOnce(rendering);
+    let settleOwner!: () => void;
+    const owner = new Promise<void>((resolve) => {
+      settleOwner = resolve;
+    });
+    const ownerCatch = vi.spyOn(owner, "catch");
+    const session = createQrSession(async (prompter) => {
+      await presentQr(prompter, owner);
+    });
+
+    const pending = session.next();
+    await vi.waitFor(() =>
+      expect(qrImageMocks.renderQrPngDataUrlWithinLimit).toHaveBeenCalledWith(
+        QR_TEXT,
+        QR_PNG_DATA_URL_MAX_LENGTH,
+      ),
+    );
+
+    expect(ownerCatch).toHaveBeenCalledOnce();
+    finishRendering(QR_DATA_URL);
+    await expect(pending).resolves.toMatchObject({ step: { type: "qr" } });
+    settleOwner();
+    await session.whenSettled();
+  });
+
   test("advances only when the QR owner settles and rejects stale acknowledgements", async () => {
     let settleOwner!: () => void;
     const owner = new Promise<void>((resolve) => {
