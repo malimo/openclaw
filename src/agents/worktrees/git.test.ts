@@ -88,6 +88,31 @@ describe("Git checkout discovery", () => {
     expect(insideGitCheckout(linkedCheckout)).toBe(true);
   });
 
+  it("recognizes direct and linked reftable worktree checkouts", async () => {
+    const root = tempDirs.make("openclaw-reftable-worktree-");
+    const mainCheckout = path.join(root, "main");
+    const linkedCheckout = path.join(root, "linked");
+    await fs.mkdir(mainCheckout);
+    await requireGit(mainCheckout, ["init", "--ref-format=reftable"]);
+    await requireGit(mainCheckout, [
+      "-c",
+      "user.name=OpenClaw Test",
+      "-c",
+      "user.email=openclaw-test@example.com",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "initial",
+    ]);
+
+    expect(findGitCheckoutRoot(mainCheckout)).toBe(mainCheckout);
+    expect(insideGitCheckout(mainCheckout)).toBe(true);
+
+    await requireGit(mainCheckout, ["worktree", "add", "--detach", linkedCheckout, "HEAD"]);
+    expect(findGitCheckoutRoot(linkedCheckout)).toBe(linkedCheckout);
+    expect(insideGitCheckout(linkedCheckout)).toBe(true);
+  });
+
   it("distinguishes contained metadata from linked checkout pointers", async () => {
     const root = tempDirs.make("openclaw-git-metadata-");
     await fs.mkdir(path.join(root, ".git"));
