@@ -44,6 +44,50 @@ describe("AppSidebar session catalog pagination", () => {
     }
   });
 
+  it("queues a fresh scan when a hidden tab returns during an active scan", async () => {
+    vi.useFakeTimers();
+    let visibility: DocumentVisibilityState = "visible";
+    const visibilitySpy = vi
+      .spyOn(document, "visibilityState", "get")
+      .mockImplementation(() => visibility);
+    try {
+      const pending = deferred<SessionsCatalogListResult>();
+      const request = vi
+        .fn()
+        .mockReturnValueOnce(pending.promise)
+        .mockResolvedValue(catalogPage([]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledOnce();
+
+      visibility = "hidden";
+      document.dispatchEvent(new Event("visibilitychange"));
+      visibility = "visible";
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(50);
+      expect(request).toHaveBeenCalledOnce();
+
+      pending.resolve(catalogPage([]));
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+      expect(request).toHaveBeenCalledTimes(2);
+    } finally {
+      visibilitySpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the scheduled freshness poll when a visible page receives focus", async () => {
     vi.useFakeTimers();
     try {
