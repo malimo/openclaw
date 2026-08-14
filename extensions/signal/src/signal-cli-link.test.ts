@@ -256,16 +256,24 @@ describe("linkSignalCliAccount", () => {
     rejectPresentation(new Error("client disconnected"));
     await vi.waitFor(() => expect(commandOptions().signal.aborted).toBe(true));
     command.resolve(
-      commandResult({ code: null, signal: "SIGTERM", killed: true, termination: "signal" }),
+      commandResult({
+        code: null,
+        signal: "SIGTERM",
+        killed: true,
+        termination: "signal",
+        stderr: "failed after sgnl://linkdevice?uuid=credential&pub_key=secret",
+      }),
     );
 
-    await expect(resultPromise).resolves.toEqual({
+    const result = await resultPromise;
+    expect(result).toEqual({
       ok: true,
       associatedAccount: "+15555550123",
     });
+    expect(JSON.stringify(result)).not.toContain("sgnl://linkdevice");
   });
 
-  it("bounds signal-cli errors and rejects incomplete success output", async () => {
+  it("bounds process output and rejects incomplete success output", async () => {
     const failedCommand = createDeferredCommand();
     const failurePromise = linkSignalCliAccount({
       cliPath: "signal-cli",
@@ -279,7 +287,9 @@ describe("linkSignalCliAccount", () => {
     const failure = await failurePromise;
     expect(failure.ok).toBe(false);
     if (!failure.ok) {
-      expect(failure.error).toBe("signal-cli error");
+      expect(failure.error).toBe(
+        "signal-cli could not finish account linking. Retry Signal setup.",
+      );
     }
 
     const missingUriCommand = createDeferredCommand();
@@ -304,6 +314,32 @@ describe("linkSignalCliAccount", () => {
       ok: false,
       error: "signal-cli link finished without reporting the associated account.",
     });
+  });
+
+  it("redacts device-link URIs from process errors", async () => {
+    const command = createDeferredCommand();
+    const linkUri = "sgnl://linkdevice?uuid=credential&pub_key=secret";
+    const onLinkUri = vi.fn(async () => undefined);
+    const resultPromise = linkSignalCliAccount({
+      cliPath: "signal-cli",
+      onLinkUri,
+    });
+
+    emitStdoutLine(linkUri);
+    await vi.waitFor(() => expect(onLinkUri).toHaveBeenCalledOnce());
+    command.resolve(
+      commandResult({
+        code: 1,
+        stderr: `Link request error: rejected ${linkUri} while provisioning`,
+      }),
+    );
+
+    const result = await resultPromise;
+    expect(result).toEqual({
+      ok: false,
+      error: "signal-cli could not finish account linking. Retry Signal setup.",
+    });
+    expect(JSON.stringify(result)).not.toContain(linkUri);
   });
 
   it("terminates noisy stdout at the link output cap", async () => {

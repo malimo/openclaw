@@ -193,9 +193,9 @@ export async function linkSignalCliAccount(params: {
     }
     return {
       ok: false,
-      error:
-        result.stderr.trim() ||
-        `signal-cli link exited with ${result.signal ? `signal ${result.signal}` : `code ${result.code ?? "unknown"}`}.`,
+      // signal-cli owns stderr and may include provisioning credentials or account paths.
+      // Keep that dependency output out of wizard notes and system-agent history.
+      error: "signal-cli could not finish account linking. Retry Signal setup.",
     };
   } catch (error) {
     resolveCompletion();
