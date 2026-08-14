@@ -114,7 +114,8 @@ describe("renderChatAvatar", () => {
     expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("B");
   });
 
-  it("settles a missing local profile avatar to initials before rendering its URL", async () => {
+  it("caches a missing local profile avatar before retrying it", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const gatewayOrigin = globalThis.location.origin;
     setAvatarGatewayOrigin(gatewayOrigin);
     const fetchAvatar = vi
@@ -139,10 +140,14 @@ describe("renderChatAvatar", () => {
     expect(image?.hasAttribute("src")).toBe(false);
 
     renderUser();
-    await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledTimes(2));
+    expect(fetchAvatar).toHaveBeenCalledOnce();
     expect(slot?.classList.contains("is-fallback")).toBe(true);
     expect(image?.hasAttribute("src")).toBe(false);
     expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("H");
+
+    now.mockReturnValue(31_001);
+    renderUser();
+    await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledTimes(2));
   });
 });
 
