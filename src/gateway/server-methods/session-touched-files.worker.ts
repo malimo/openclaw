@@ -13,9 +13,7 @@ export type SessionTouchedFilesWorkerRequest = {
   cacheKey: string;
 };
 
-type SessionTouchedFilesWorkerMessage =
-  | SessionTouchedFilesWorkerRequest
-  | { type: "shutdown" };
+type SessionTouchedFilesWorkerMessage = SessionTouchedFilesWorkerRequest | { type: "shutdown" };
 
 export type SessionTouchedFilesWorkerResult =
   | { type: "result"; requestId: number; status: "ok"; files: SessionTouchedFile[] }

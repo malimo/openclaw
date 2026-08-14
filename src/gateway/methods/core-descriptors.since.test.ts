@@ -86,6 +86,7 @@ const CURRENT_TRAIN_METHODS = [
   "sessions.groups.update",
   "sessions.groups.defaults",
   "sessions.recover",
+  "sessions.workspace.status",
   "update.hold",
   "sessions.catalog.startTerminal",
   "worker.desktop.observe",
