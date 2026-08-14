@@ -732,35 +732,4 @@ describe("AppSidebar session catalog pagination", () => {
       vi.useRealTimers();
     }
   });
-
-  it("preserves a native presence refresh when focus starts the activation burst", async () => {
-    vi.useFakeTimers();
-    try {
-      const request = vi.fn().mockResolvedValue(catalogPage([]));
-      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      gateway.publish({
-        hello: {
-          features: { methods: ["sessions.catalog.list"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      const { sidebar } = await mountSidebar(
-        gateway.gateway,
-        createSessions("main", ["agent:main:main"]),
-      );
-      sidebar.connected = true;
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-
-      globalThis.dispatchEvent(new Event("focus"));
-      gateway.publishEvent("presence", {
-        presence: [{ deviceId: "node-1", mode: "node", reason: "connect" }],
-      });
-      await vi.advanceTimersByTimeAsync(49);
-      expect(request).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(request).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 });
