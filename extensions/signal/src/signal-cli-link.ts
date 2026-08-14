@@ -118,8 +118,8 @@ export async function linkSignalCliAccount(params: {
           async () =>
             await params.onLinkUri(trimmed, completion, Date.now() + SIGNAL_CLI_LINK_QR_TIMEOUT_MS),
         )
-        .catch((error: unknown) => {
-          stopWithError(`Signal account linking stopped: ${errorMessage(error)}`);
+        .catch(() => {
+          stopWithError("Signal account linking could not present the device-link QR code.");
         });
       return;
     }

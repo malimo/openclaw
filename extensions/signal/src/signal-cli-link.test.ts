@@ -358,24 +358,27 @@ describe("linkSignalCliAccount", () => {
     });
   });
 
-  it("rejects a zero exit after presentation failure terminates signal-cli", async () => {
+  it("redacts QR presentation failures before returning setup-visible errors", async () => {
     const command = createDeferredCommand();
+    const linkUri = "sgnl://linkdevice?uuid=credential&pub_key=secret";
     const presentationFailure = linkSignalCliAccount({
       cliPath: "signal-cli",
       onLinkUri: async () => {
-        throw new Error("client disconnected");
+        throw new Error(`could not render ${linkUri}`);
       },
     });
-    emitStdoutLine("sgnl://linkdevice?uuid=test&pub_key=test");
+    emitStdoutLine(linkUri);
     await vi.waitFor(() => expect(commandOptions().signal.aborted).toBe(true));
     expect(commandOptions().killProcessTree).toBe(true);
     command.resolve(
       commandResult({ code: 0, signal: "SIGTERM", killed: true, termination: "signal" }),
     );
-    await expect(presentationFailure).resolves.toEqual({
+    const result = await presentationFailure;
+    expect(result).toEqual({
       ok: false,
-      error: "Signal account linking stopped: client disconnected",
+      error: "Signal account linking could not present the device-link QR code.",
     });
+    expect(JSON.stringify(result)).not.toContain(linkUri);
   });
 
   it("bounds the whole link command beyond signal-cli's provisioning deadline", async () => {
