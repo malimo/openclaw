@@ -26,6 +26,40 @@ function gatewayHello(methods: string[], scopes = ["operator.admin"]) {
 }
 
 describe("session workspace state", () => {
+  it("keeps the collapsed diff action off the session-files hot path", async () => {
+    const listFiles = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:current",
+      gitCheckout: true,
+      files: [],
+    });
+    const request = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:current",
+      gitCheckout: true,
+    });
+    const state = {
+      agentsList: { agents: [{ id: "main" }], defaultId: "main" },
+      client: { request },
+      connected: true,
+      handleOpenSidebar: vi.fn(),
+      hello: gatewayHello(["sessions.diff", "sessions.workspace.status"]),
+      requestUpdate: vi.fn(),
+      sessionKey: "agent:main:current",
+      sessions: { listFiles },
+    } as unknown as SessionWorkspaceHost;
+
+    createSessionWorkspaceProps(state);
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("sessions.workspace.status", {
+        sessionKey: "agent:main:current",
+        agentId: "main",
+      }),
+    );
+    expect(listFiles).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(createSessionWorkspaceProps(state).onOpenDiff).toBeTypeOf("function"),
+    );
+  });
   it("carries the saved bottom dock across session workspace state", () => {
     const state = {
       client: null,

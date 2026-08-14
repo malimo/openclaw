@@ -222,6 +222,8 @@ export {
   SessionFileKindSchema,
   SessionFilePreviewKindSchema,
   SessionFileRelevanceSchema,
+  SessionsWorkspaceStatusParamsSchema,
+  SessionsWorkspaceStatusResultSchema,
   SessionsFilesGetParamsSchema,
   SessionsFilesGetResultSchema,
   SessionsFilesSetParamsSchema,

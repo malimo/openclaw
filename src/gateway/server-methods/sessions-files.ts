@@ -2,7 +2,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
-import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -13,6 +12,8 @@ import {
   type SessionFileEntry,
   type SessionFileRelevance,
   type SessionsFilesGetParams,
+  type SessionsWorkspaceStatusResult,
+  validateSessionsWorkspaceStatusParams,
   validateSessionsFilesRevealParams,
   validateSessionsFilesGetParams,
   validateSessionsFilesListParams,
@@ -28,9 +29,7 @@ import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
-  readSessionTranscriptVisibleMessageDeltaCore,
   resolveTranscriptReadTarget,
-  sqliteMessageEventWithSeq,
   toTranscriptReadScope,
   type SessionTranscriptReadScope,
 } from "../session-transcript-readers.js";
@@ -42,6 +41,8 @@ import {
   resolveOpenPathCommand,
   sanitizePathForLog,
 } from "./open-path.js";
+import { loadSessionTouchedFilesInWorker } from "./session-touched-files-worker-runtime.js";
+import type { SessionTouchedFile as TouchedFile } from "./session-touched-files.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import {
@@ -62,12 +63,7 @@ import {
   type WorkspaceFileUpdateResult,
 } from "./workspace-fs.js";
 
-type FileKind = "modified" | "read";
-
-type TouchedFile = {
-  path: string;
-  kind: FileKind;
-};
+type FileKind = TouchedFile["kind"];
 
 type LoadedSessionFiles = {
   root?: string;
@@ -76,18 +72,10 @@ type LoadedSessionFiles = {
   files: TouchedFile[];
 };
 
-type TouchedFilesCacheEntry = {
-  cursor: string;
-  files: Map<string, TouchedFile>;
-};
-
 const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 const MAX_BROWSER_ENTRIES = 250;
 const MAX_SEARCH_ENTRIES = 500;
 const MAX_SEARCH_VISITED_ENTRIES = 5_000;
-const TOUCHED_FILES_CACHE_LIMIT = 16;
-const TOUCHED_FILES_DELTA_MAX_MESSAGES = 1_000;
-const TOUCHED_FILES_DELTA_MAX_BYTES = 1_000_000;
 // Matches file-type's documented default buffer sample while keeping metadata
 // classification independent from the 256 KiB inline-content cap.
 const MIME_SNIFF_PREFIX_BYTES = 4_100;
@@ -117,27 +105,6 @@ const SEARCH_SKIP_DIRS = new Set([
   "node_modules",
 ]);
 
-// Request latency must not scale with transcript size: delta resets rebuild the
-// fold, while this process-local LRU cap bounds retained session state.
-const touchedFilesCache = new Map<string, TouchedFilesCacheEntry>();
-// Page yields let other requests interleave, so singleflight keeps one cache-mutating fold per key.
-const touchedFilesFolds = new Map<string, Promise<Map<string, TouchedFile>>>();
-
-function readTouchedFilesCache(key: string): TouchedFilesCacheEntry | undefined {
-  const cached = touchedFilesCache.get(key);
-  if (cached) {
-    touchedFilesCache.delete(key);
-    touchedFilesCache.set(key, cached);
-  }
-  return cached;
-}
-
-function writeTouchedFilesCache(key: string, entry: TouchedFilesCacheEntry): void {
-  touchedFilesCache.delete(key);
-  touchedFilesCache.set(key, entry);
-  pruneMapToMaxSize(touchedFilesCache, TOUCHED_FILES_CACHE_LIMIT);
-}
-
 function sessionFilesError(type: string, message: string, details?: Record<string, unknown>) {
   return errorShape(ErrorCodes.INVALID_REQUEST, message, {
     details: {
@@ -145,165 +112,6 @@ function sessionFilesError(type: string, message: string, details?: Record<strin
       ...details,
     },
   });
-}
-
-function readPathArg(args: Record<string, unknown>): string | undefined {
-  return (
-    normalizeOptionalString(args.path) ??
-    normalizeOptionalString(args.file_path) ??
-    normalizeOptionalString(args.filePath) ??
-    normalizeOptionalString(args.file)
-  );
-}
-
-function addTouchedFile(
-  files: Map<string, TouchedFile>,
-  filePath: string | undefined,
-  kind: FileKind,
-) {
-  if (!filePath) {
-    return;
-  }
-  const existing = files.get(filePath);
-  if (existing?.kind === "modified" || (existing && kind === "read")) {
-    return;
-  }
-  files.set(filePath, { path: filePath, kind });
-}
-
-function addRawPatchFiles(files: Map<string, TouchedFile>, input: unknown) {
-  if (typeof input !== "string") {
-    return;
-  }
-  const fileLinePattern = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm;
-  for (const match of input.matchAll(fileLinePattern)) {
-    addTouchedFile(files, match[1]?.trim(), "modified");
-  }
-  const moveLinePattern = /^\*\*\* Move to: (.+)$/gm;
-  for (const match of input.matchAll(moveLinePattern)) {
-    addTouchedFile(files, match[1]?.trim(), "modified");
-  }
-}
-
-function addStructuredPatchFiles(files: Map<string, TouchedFile>, changes: unknown) {
-  if (!Array.isArray(changes)) {
-    return;
-  }
-  for (const changeValue of changes) {
-    const change = asOptionalObjectRecord(changeValue);
-    addTouchedFile(files, normalizeOptionalString(change?.path), "modified");
-    const kind = asOptionalObjectRecord(change?.kind);
-    addTouchedFile(
-      files,
-      normalizeOptionalString(kind?.move_path) ?? normalizeOptionalString(kind?.movePath),
-      "modified",
-    );
-  }
-}
-
-function addPatchFiles(files: Map<string, TouchedFile>, args: Record<string, unknown>) {
-  addRawPatchFiles(files, args.input);
-  addStructuredPatchFiles(files, args.changes);
-}
-
-function isToolCallBlockType(value: unknown): boolean {
-  if (typeof value !== "string") {
-    return false;
-  }
-  const normalized = value.toLowerCase().replace(/[_-]/g, "");
-  return normalized === "toolcall" || normalized === "tooluse";
-}
-
-function collectTouchedFilesFromMessage(message: unknown, files: Map<string, TouchedFile>) {
-  const record = asOptionalObjectRecord(message);
-  if (record?.role !== "assistant" || !Array.isArray(record.content)) {
-    return;
-  }
-  for (const blockValue of record.content) {
-    const block = asOptionalObjectRecord(blockValue);
-    if (!block || !isToolCallBlockType(block.type)) {
-      continue;
-    }
-    const toolName = normalizeOptionalString(block.name)?.toLowerCase();
-    const args =
-      asOptionalObjectRecord(block.arguments) ??
-      asOptionalObjectRecord(block.input) ??
-      asOptionalObjectRecord(block.args);
-    if (!toolName || !args) {
-      continue;
-    }
-    if (toolName === "read") {
-      addTouchedFile(files, readPathArg(args), "read");
-    } else if (toolName === "write" || toolName === "edit") {
-      addTouchedFile(files, readPathArg(args), "modified");
-    } else if (toolName === "apply_patch") {
-      addPatchFiles(files, args);
-    }
-  }
-}
-
-async function foldSqliteTouchedFiles(
-  scope: SessionTranscriptReadScope,
-  cacheKey: string,
-): Promise<Map<string, TouchedFile>> {
-  let cached = readTouchedFilesCache(cacheKey);
-  let cursor = cached?.cursor;
-  let files = cached?.files ?? new Map<string, TouchedFile>();
-  let maxBytes = TOUCHED_FILES_DELTA_MAX_BYTES;
-
-  while (true) {
-    const delta = readSessionTranscriptVisibleMessageDeltaCore(scope, {
-      ...(cursor ? { cursor } : {}),
-      maxBytes,
-      maxMessages: TOUCHED_FILES_DELTA_MAX_MESSAGES,
-    });
-    if (delta.kind === "missing") {
-      touchedFilesCache.delete(cacheKey);
-      return new Map();
-    }
-    if (delta.kind === "reset") {
-      cached = { cursor: delta.cursor, files: new Map() };
-      cursor = cached.cursor;
-      files = cached.files;
-      writeTouchedFilesCache(cacheKey, cached);
-      continue;
-    }
-    for (const event of delta.events) {
-      const message = sqliteMessageEventWithSeq(event);
-      if (message !== undefined) {
-        collectTouchedFilesFromMessage(message, files);
-      }
-    }
-    cached = { cursor: delta.cursor, files };
-    cursor = cached.cursor;
-    writeTouchedFilesCache(cacheKey, cached);
-    if (!delta.hasMore) {
-      return files;
-    }
-    if (delta.requiredBytes !== undefined) {
-      maxBytes = delta.requiredBytes;
-    }
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-  }
-}
-
-async function loadSqliteTouchedFiles(
-  scope: SessionTranscriptReadScope,
-  cacheKey: string,
-): Promise<Map<string, TouchedFile>> {
-  const inFlight = touchedFilesFolds.get(cacheKey);
-  if (inFlight) {
-    return inFlight;
-  }
-  const fold = foldSqliteTouchedFiles(scope, cacheKey);
-  touchedFilesFolds.set(cacheKey, fold);
-  try {
-    return await fold;
-  } finally {
-    touchedFilesFolds.delete(cacheKey);
-  }
 }
 
 function toDisplayPath(root: string, resolved: string): string {
@@ -515,7 +323,13 @@ async function toSessionFileEntry(
 function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
   const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
   if (!loaded.entry?.sessionId) {
-    return { ...loaded, agentId: undefined, root: undefined, fileRoot: undefined };
+    return {
+      ...loaded,
+      agentId: undefined,
+      root: undefined,
+      fileRoot: undefined,
+      diffCwd: undefined,
+    };
   }
   const agentId = normalizeAgentId(
     loaded.agentId ??
@@ -722,7 +536,7 @@ async function loadSessionFiles(params: {
   const target = resolveTranscriptReadTarget(scope);
   // Entry-scoped reads without an explicit sessionFile always resolve to a canonical SQLite marker.
   // Legacy transcript files are doctor-owned migration debt, not a runtime read path.
-  const files = await loadSqliteTouchedFiles(
+  const files = await loadSessionTouchedFilesInWorker(
     toTranscriptReadScope(target),
     `${agentId}\0${entry.sessionId}\0${target.storePath ?? ""}`,
   );
@@ -730,12 +544,37 @@ async function loadSessionFiles(params: {
     root: loaded.root,
     fileRoot: loaded.fileRoot,
     diffCwd: loaded.diffCwd,
-    files: [...files.values()].toSorted((a, b) => {
+    files: files.toSorted((a, b) => {
       if (a.kind !== b.kind) {
         return a.kind === "modified" ? -1 : 1;
       }
       return a.path.localeCompare(b.path);
     }),
+  };
+}
+
+async function loadGitCheckoutStatus(diffCwd: string | undefined): Promise<boolean | undefined> {
+  if (!diffCwd) {
+    return undefined;
+  }
+  try {
+    const result = await runGit(diffCwd, ["rev-parse", "--show-toplevel"]);
+    return result.code === 0 && Boolean(result.stdout.trim());
+  } catch {
+    return false;
+  }
+}
+
+async function buildWorkspaceStatus(params: {
+  sessionKey: string;
+  agentId?: string;
+}): Promise<SessionsWorkspaceStatusResult> {
+  const loaded = loadSessionFileRoot(params);
+  const gitCheckout = await loadGitCheckoutStatus(loaded.diffCwd);
+  return {
+    sessionKey: params.sessionKey,
+    ...(loaded.root ? { root: loaded.root } : {}),
+    ...(gitCheckout === undefined ? {} : { gitCheckout }),
   };
 }
 
@@ -752,15 +591,7 @@ async function buildListResult(params: {
 }> {
   const loaded = await loadSessionFiles(params);
   const root = loaded.root;
-  let gitCheckout: boolean | undefined;
-  if (loaded.diffCwd) {
-    try {
-      const result = await runGit(loaded.diffCwd, ["rev-parse", "--show-toplevel"]);
-      gitCheckout = result.code === 0 && Boolean(result.stdout.trim());
-    } catch {
-      gitCheckout = false;
-    }
-  }
+  const gitCheckout = await loadGitCheckoutStatus(loaded.diffCwd);
   const workspaceFiles = root
     ? loaded.files.filter((file) =>
         Boolean(resolveTouchedFilePath({ root, fileRoot: loaded.fileRoot, filePath: file.path })),
@@ -878,6 +709,28 @@ function requireSessionFilesAgentId(params: {
 
 /** Gateway handlers for session files and workspace browsing. */
 export const sessionsFilesHandlers: GatewayRequestHandlers = {
+  "sessions.workspace.status": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSessionsWorkspaceStatusParams,
+        "sessions.workspace.status",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const agentId = requireSessionFilesAgentId({
+      cfg: context.getRuntimeConfig(),
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      respond,
+    });
+    if (!agentId) {
+      return;
+    }
+    respond(true, await buildWorkspaceStatus({ ...params, agentId }));
+  },
   "sessions.files.list": async ({ params, respond, context }) => {
     if (
       !assertValidParams(params, validateSessionsFilesListParams, "sessions.files.list", respond)

@@ -382,6 +382,12 @@ export type SessionWorkspaceListResult = {
   artifacts?: SessionWorkspaceArtifactEntry[];
 };
 
+export type SessionWorkspaceStatusResult = {
+  sessionKey: string;
+  root?: string;
+  gitCheckout?: boolean;
+};
+
 export type SessionWorkspaceGetResult = {
   sessionKey: string;
   root?: string;

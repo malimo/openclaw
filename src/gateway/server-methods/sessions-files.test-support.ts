@@ -9,7 +9,8 @@ type SessionFilesMethod =
   | "sessions.files.list"
   | "sessions.files.get"
   | "sessions.files.set"
-  | "sessions.files.reveal";
+  | "sessions.files.reveal"
+  | "sessions.workspace.status";
 
 type ResponderCall = { ok: boolean; payload?: unknown; error?: unknown };
 type ReturnValueMock = { mockReturnValue: (value: unknown) => unknown };

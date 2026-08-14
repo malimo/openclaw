@@ -8157,6 +8157,46 @@ public struct SessionFileEntry: Codable, Sendable {
     }
 }
 
+public struct SessionsWorkspaceStatusParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+    }
+}
+
+public struct SessionsWorkspaceStatusResult: Codable, Sendable {
+    public let sessionkey: String
+    public let root: String?
+    public let gitcheckout: Bool?
+
+    public init(
+        sessionkey: String,
+        root: String? = nil,
+        gitcheckout: Bool? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.root = root
+        self.gitcheckout = gitcheckout
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case root
+        case gitcheckout = "gitCheckout"
+    }
+}
+
 public struct SessionsFilesListParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?

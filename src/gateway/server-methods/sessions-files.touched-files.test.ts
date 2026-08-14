@@ -48,6 +48,11 @@ vi.mock("../session-transcript-readers.js", async () => {
   };
 });
 
+vi.mock("./session-touched-files-worker-runtime.js", async () => {
+  const { loadSessionTouchedFilesInline } = await import("./session-touched-files.js");
+  return { loadSessionTouchedFilesInWorker: loadSessionTouchedFilesInline };
+});
+
 const invokeSessionFilesHandler = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
 const mockVisibleMessages = createVisibleMessagesMock(
   hoisted.readSessionTranscriptVisibleMessageDeltaCore,

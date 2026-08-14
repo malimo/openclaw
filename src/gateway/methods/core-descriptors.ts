@@ -533,6 +533,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["portal.list", "portals", "operator.read", "2026.8"],
   ["portal.open", "portals", "operator.write", "2026.8", { controlPlaneWrite: true }],
   ["portal.close", "portals", "operator.write", "2026.8", { controlPlaneWrite: true }],
+  // Collapsed chat controls read checkout capability without materializing transcript files.
+  ["sessions.workspace.status", "sessions-files", "operator.read", "2026.8"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

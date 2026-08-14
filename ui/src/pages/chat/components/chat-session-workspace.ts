@@ -10,6 +10,7 @@ import type {
   ArtifactDownloadResult,
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
+  SessionWorkspaceStatusResult,
 } from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
 import {
@@ -74,11 +75,16 @@ type SessionWorkspaceState = {
   collapsed: boolean;
   dock: ChatWorkspaceDock;
   error: string | null;
+  gitCheckout: boolean | null;
   list: SessionWorkspaceListResult | null;
   loading: boolean;
   pendingReload: boolean;
+  pendingStatusReload: boolean;
   requestId: number;
   sessionKey: string;
+  statusLoaded: boolean;
+  statusLoading: boolean;
+  statusRequestId: number;
 };
 
 type OpenRequest = {
@@ -156,11 +162,16 @@ function getWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
     // per-session state just carries it forward.
     dock: current?.dock ?? normalizeChatWorkspaceDock(state.settings?.chatWorkspaceDock),
     error: null,
+    gitCheckout: null,
     list: null,
     loading: false,
     pendingReload: false,
+    pendingStatusReload: false,
     requestId: 0,
     sessionKey,
+    statusLoaded: false,
+    statusLoading: false,
+    statusRequestId: 0,
   };
   state.sessionWorkspaceState = next;
   return next;
@@ -319,17 +330,19 @@ function loadWorkspace(
   const agentId = workspace.agentId;
   void (async () => {
     try {
-      const files = await state.sessions.listFiles(sessionKey, {
-        path: workspace.browserSearch ? "" : workspace.browserPath,
-        search: workspace.browserSearch,
-        agentId,
-      });
-      const artifacts = await state.client?.request<{
-        artifacts?: SessionWorkspaceListResult["artifacts"];
-      } | null>("artifacts.list", {
-        sessionKey,
-        ...(agentId ? { agentId } : {}),
-      });
+      const [files, artifacts] = await Promise.all([
+        state.sessions.listFiles(sessionKey, {
+          path: workspace.browserSearch ? "" : workspace.browserPath,
+          search: workspace.browserSearch,
+          agentId,
+        }),
+        state.client?.request<{
+          artifacts?: SessionWorkspaceListResult["artifacts"];
+        } | null>("artifacts.list", {
+          sessionKey,
+          ...(agentId ? { agentId } : {}),
+        }),
+      ]);
       const current = currentWorkspaceState(state);
       if (current !== workspace || current.requestId !== requestId) {
         return;
@@ -337,6 +350,8 @@ function loadWorkspace(
       const fileItems = files?.files ?? [];
       const artifactItems = artifacts?.artifacts ?? [];
       const browserItems = files?.browser?.entries ?? [];
+      current.gitCheckout = files?.gitCheckout ?? null;
+      current.statusLoaded = true;
       current.list = {
         sessionKey,
         ...(files?.root ? { root: files.root } : {}),
@@ -373,13 +388,71 @@ function loadWorkspace(
   })();
 }
 
+function loadWorkspaceStatus(
+  state: SessionWorkspaceHost,
+  workspace: SessionWorkspaceState,
+  force = false,
+) {
+  if (!state.client || !state.connected || workspace.statusLoading) {
+    if (force && workspace.statusLoading) {
+      workspace.pendingStatusReload = true;
+    }
+    return;
+  }
+  const requestId = workspace.statusRequestId + 1;
+  workspace.statusRequestId = requestId;
+  workspace.statusLoading = true;
+  workspace.pendingStatusReload = false;
+  const sessionKey = state.sessionKey;
+  const agentId = workspace.agentId;
+  void state.client
+    .request<SessionWorkspaceStatusResult>("sessions.workspace.status", {
+      sessionKey,
+      ...(agentId ? { agentId } : {}),
+    })
+    .then((result) => {
+      const current = currentWorkspaceState(state);
+      if (current !== workspace || current.statusRequestId !== requestId) {
+        return;
+      }
+      current.gitCheckout = result.gitCheckout ?? null;
+      current.statusLoaded = true;
+    })
+    .catch(() => {
+      const current = currentWorkspaceState(state);
+      if (current === workspace && current.statusRequestId === requestId) {
+        // The diff panel already owns unknown/not-git fallbacks. A status read
+        // failure must not block the workspace rail or strand its refresh path.
+        current.gitCheckout = null;
+        current.statusLoaded = true;
+      }
+    })
+    .finally(() => {
+      const current = currentWorkspaceState(state);
+      if (current === workspace && current.statusRequestId === requestId) {
+        current.statusLoading = false;
+        const reload = current.pendingStatusReload;
+        current.pendingStatusReload = false;
+        if (reload) {
+          loadWorkspaceStatus(state, current);
+        }
+      }
+      requestUpdate(state);
+    });
+}
+
 /** Refresh workspace facts after a run, which may have created a git checkout. */
 export function refreshSessionWorkspace(state: SessionWorkspaceHost) {
   const workspace = state.sessionWorkspaceState;
   if (!workspace || workspace.sessionKey !== state.sessionKey) {
     return;
   }
-  if (workspace.loading) {
+  if (
+    workspace.collapsed &&
+    isGatewayMethodAdvertised(state, "sessions.workspace.status") === true
+  ) {
+    loadWorkspaceStatus(state, workspace, true);
+  } else if (workspace.loading) {
     workspace.pendingReload = true;
   } else {
     loadWorkspace(state, workspace);
@@ -676,12 +749,12 @@ export function createSessionWorkspaceProps(
 ): SessionWorkspaceProps {
   state.sessionWorkspaceDraftScope = options?.draftScope;
   const workspace = getWorkspaceState(state);
+  const diffAdvertised = isGatewayMethodAdvertised(state, "sessions.diff") === true;
+  const statusAdvertised = isGatewayMethodAdvertised(state, "sessions.workspace.status") === true;
   if (
-    // The collapsed header still renders the diff action, so load its checkout
-    // capability eagerly instead of waiting for the file rail to open.
     (options?.expanded === true ||
       !workspace.collapsed ||
-      isGatewayMethodAdvertised(state, "sessions.diff") === true) &&
+      (diffAdvertised && !statusAdvertised)) &&
     state.connected &&
     state.agentsList &&
     !workspace.loading &&
@@ -689,6 +762,16 @@ export function createSessionWorkspaceProps(
     workspace.list?.sessionKey !== state.sessionKey
   ) {
     loadWorkspace(state, workspace);
+  } else if (
+    workspace.collapsed &&
+    diffAdvertised &&
+    statusAdvertised &&
+    state.connected &&
+    state.agentsList &&
+    !workspace.statusLoading &&
+    !workspace.statusLoaded
+  ) {
+    loadWorkspaceStatus(state, workspace);
   }
   const diffContent = resolveSessionDiffSidebarContent(state);
   return {
@@ -741,8 +824,8 @@ export function resolveSessionDiffSidebarContent(
   const canOpenDiff =
     isGatewayMethodAdvertised(state, "sessions.diff") === true &&
     Boolean(state.client) &&
-    workspace.list?.sessionKey === state.sessionKey &&
-    workspace.list.gitCheckout !== false;
+    workspace.statusLoaded &&
+    workspace.gitCheckout !== false;
   return canOpenDiff ? buildSessionDiffSidebarContent(state) : null;
 }
 

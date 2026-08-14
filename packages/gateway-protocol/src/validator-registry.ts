@@ -206,6 +206,7 @@ export const validateSessionsCleanupParams = compile(S.SessionsCleanupParamsSche
 export const validateSessionsPreviewParams = compile(S.SessionsPreviewParamsSchema);
 export const validateSessionsDescribeParams = compile(S.SessionsDescribeParamsSchema);
 export const validateSessionsResolveParams = compile(S.SessionsResolveParamsSchema);
+export const validateSessionsWorkspaceStatusParams = compile(S.SessionsWorkspaceStatusParamsSchema);
 export const validateSessionsFilesListParams = compile(S.SessionsFilesListParamsSchema);
 export const validateSessionsFilesGetParams = compile(S.SessionsFilesGetParamsSchema);
 export const validateSessionsFilesSetParams = compile(S.SessionsFilesSetParamsSchema);

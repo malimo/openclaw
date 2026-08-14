@@ -58,6 +58,11 @@ vi.mock("../session-transcript-readers.js", async () => {
   };
 });
 
+vi.mock("./session-touched-files-worker-runtime.js", async () => {
+  const { loadSessionTouchedFilesInline } = await import("./session-touched-files.js");
+  return { loadSessionTouchedFilesInWorker: loadSessionTouchedFilesInline };
+});
+
 const invokeSessionFilesHandler = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
 const mockVisibleMessages = createVisibleMessagesMock(
   hoisted.readSessionTranscriptVisibleMessageDeltaCore,
@@ -92,6 +97,34 @@ describe("sessions.files RPC handlers", () => {
     expect(hoisted.execOpenPath).toHaveBeenCalledWith(
       resolveOpenPathCommand(listPayload.root as string),
     );
+  });
+
+  it("reports checkout status without reading the session transcript", async () => {
+    const initialPayload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.workspace.status", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    expect(initialPayload).toEqual({
+      sessionKey: "agent:main:main",
+      root: workspaceRoot,
+      gitCheckout: false,
+    });
+    expect(hoisted.readSessionTranscriptVisibleMessageDeltaCore).not.toHaveBeenCalled();
+
+    const gitInit = await import("node:child_process").then(({ execFileSync }) =>
+      execFileSync("git", ["init", "--quiet"], { cwd: workspaceRoot }),
+    );
+    expect(gitInit).toBeInstanceOf(Buffer);
+
+    const checkoutPayload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.workspace.status", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(checkoutPayload.gitCheckout).toBe(true);
+    expect(hoisted.readSessionTranscriptVisibleMessageDeltaCore).not.toHaveBeenCalled();
   });
 
   it("uses the persisted fixed-store owner for a bare session workspace", async () => {
