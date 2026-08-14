@@ -141,7 +141,7 @@ class WizardSessionPrompter implements WizardPrompter {
         const owner = this.session.awaitAnswer(step, undefined, true);
         void params.dismissed.then(
           () => this.session.dismissStep(step.id, { value: undefined }),
-          (error: unknown) => this.session.dismissStep(step.id, { error }),
+          () => this.session.dismissStep(step.id, { failed: true }),
         );
         await owner;
       };
@@ -488,7 +488,7 @@ export class WizardSession {
     return true;
   }
 
-  dismissStep(stepId: string, result: { value: unknown } | { error: unknown }): boolean {
+  dismissStep(stepId: string, result: { value: unknown } | { failed: true }): boolean {
     // The producer is the sole completion authority. Retire its presentation before
     // resuming the hosted runner so no client acknowledgement can race the real result.
     this.settledExternalQrOwnerStepIds.add(stepId);
@@ -506,8 +506,10 @@ export class WizardSession {
     if (this.currentStep?.id === stepId) {
       this.clearCurrentStep();
     }
-    if ("error" in result) {
-      pending.deferred.reject(result.error);
+    if ("failed" in result) {
+      // Producer failures may contain the raw credential URI. Cross the session boundary
+      // with a fixed error so client replies and persisted chat history cannot retain it.
+      pending.deferred.reject(new Error("wizard: QR presentation owner failed"));
     } else {
       pending.deferred.resolve(result.value);
     }

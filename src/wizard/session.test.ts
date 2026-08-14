@@ -294,6 +294,31 @@ describe("WizardSession", () => {
     });
   });
 
+  test("redacts credential text rejected by the QR presentation owner", async () => {
+    let rejectOwner!: (error: Error) => void;
+    const owner = new Promise<void>((_resolve, reject) => {
+      rejectOwner = reject;
+    });
+    const session = createQrSession(async (prompter) => {
+      await presentQr(prompter, owner);
+    });
+
+    await expect(session.next()).resolves.toMatchObject({
+      done: false,
+      step: { type: "qr" },
+    });
+    const credentialUri = "sgnl://linkdevice?uuid=synthetic-secret&pub_key=synthetic-key";
+    rejectOwner(new Error(`signal-cli link failed for ${credentialUri}`));
+
+    const result = await session.next();
+    expect(result).toMatchObject({
+      done: true,
+      status: "error",
+      error: "Error: wizard: QR presentation owner failed",
+    });
+    expect(JSON.stringify(result)).not.toContain(credentialUri);
+  });
+
   test("advances only when the QR owner settles and rejects stale acknowledgements", async () => {
     let settleOwner!: () => void;
     const owner = new Promise<void>((resolve) => {

@@ -16,6 +16,38 @@ import {
 const QR_TEXT = "https://example.test/pair";
 
 describe("SystemAgentChatEngine runtime", () => {
+  it("keeps rejected QR credentials out of replies and persisted history", async () => {
+    let rejectOwner!: (error: Error) => void;
+    const owner = new Promise<void>((_resolve, reject) => {
+      rejectOwner = reject;
+    });
+    const credentialUri = "sgnl://linkdevice?uuid=synthetic-secret&pub_key=synthetic-key";
+    const engine = new SystemAgentChatEngine({
+      supportsQrCode: true,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel, prompter) => {
+        await prompter.qrCode?.({
+          title: "Link a device",
+          message: "Scan this QR code and approve the device.",
+          text: credentialUri,
+          dismissed: owner,
+        });
+      },
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    expect(prompt.step?.type).toBe("qr");
+    rejectOwner(new Error(`signal-cli link failed for ${credentialUri}`));
+    await vi.waitFor(() => expect(engine.hasPendingQrCode()).toBe(false));
+
+    const stopped = await engine.handle("status");
+    expect(stopped.text).toContain("setup stopped: Error: wizard: QR presentation owner failed");
+    expect(stopped.text).not.toContain(credentialUri);
+    expect(JSON.stringify(engine.historySince(0))).not.toContain(credentialUri);
+  });
+
   it("fences default channel durable effects after QR cancellation", async () => {
     useTempStateDir();
     const baseConfig: OpenClawConfig = {};
