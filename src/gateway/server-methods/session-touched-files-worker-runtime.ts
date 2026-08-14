@@ -169,12 +169,21 @@ export async function loadSessionTouchedFilesInWorker(
 }
 
 export async function closeSessionTouchedFilesWorker(): Promise<void> {
-  await stopping;
+  if (stopping) {
+    await stopping;
+  }
   if (closing) {
     return await closing;
   }
   const active = worker;
   if (!active) {
+    const activeStop = stopping;
+    if (activeStop) {
+      const cleanupError = await activeStop;
+      if (cleanupError) {
+        throw cleanupError;
+      }
+    }
     return;
   }
   closing = new Promise<void>((resolve, reject) => {
@@ -188,6 +197,12 @@ export async function closeSessionTouchedFilesWorker(): Promise<void> {
       active.removeListener("message", onMessage);
       if (worker === active) {
         const cleanupError = await stopWorkerNow(new Error("session touched-files worker closed"));
+        if (cleanupError) {
+          reject(cleanupError);
+          return;
+        }
+      } else if (stopping) {
+        const cleanupError = await stopping;
         if (cleanupError) {
           reject(cleanupError);
           return;

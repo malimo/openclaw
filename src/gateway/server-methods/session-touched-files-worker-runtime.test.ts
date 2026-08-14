@@ -147,6 +147,32 @@ describe("session touched-files worker runtime", () => {
       releaseTermination();
       terminateSpy.mockRestore();
     }
+
+    await loadSessionTouchedFilesInWorker(scope, `main\0worker-terminate-session\0${storePath}`);
+    let releaseSecondTermination: () => void = () => {};
+    const secondTerminationGate = new Promise<void>((resolve) => {
+      releaseSecondTermination = resolve;
+    });
+    const secondTerminateSpy = vi
+      .spyOn(Worker.prototype, "terminate")
+      .mockImplementation(function (this: Worker) {
+        return secondTerminationGate.then(() => terminateWorker.call(this));
+      });
+    try {
+      let closeCompleted = false;
+      const close = closeSessionTouchedFilesWorker().then(() => {
+        closeCompleted = true;
+      });
+      const termination = terminateSessionTouchedFilesWorkerForTest();
+      await Promise.resolve();
+      expect(closeCompleted).toBe(false);
+
+      releaseSecondTermination();
+      await Promise.all([close, termination]);
+    } finally {
+      releaseSecondTermination();
+      secondTerminateSpy.mockRestore();
+    }
     closeOpenClawAgentDatabasesForTest();
 
     expect(() => assertNoOpenClawAgentDatabaseLeases("main", { env })).not.toThrow();
