@@ -2,11 +2,13 @@ type AvatarRouteEntry = {
   blobUrl: string | null;
   consumers: Map<symbol, () => void>;
   controller: AbortController;
+  notFoundUntilMs: number | undefined;
   releaseTimer: ReturnType<typeof setTimeout> | undefined;
 };
 
 /** Bound protected avatar fetches so a stalled Gateway route cannot pin UI state forever. */
 const AUTHENTICATED_AVATAR_FETCH_TIMEOUT_MS = 30_000;
+const AUTHENTICATED_AVATAR_NOT_FOUND_CACHE_MS = 30_000;
 const sharedAvatarRoutes = new Map<string, AvatarRouteEntry>();
 
 function avatarRouteKey(
@@ -28,6 +30,9 @@ function releaseEntry(key: string, owner: symbol) {
   }
   // Lit can replace one route consumer with another in a later microtask. Finalize
   // unowned routes on the next task so the shared request survives that DOM handoff.
+  const releaseDelayMs = entry.notFoundUntilMs
+    ? Math.max(0, entry.notFoundUntilMs - Date.now())
+    : 0;
   entry.releaseTimer = setTimeout(() => {
     entry.releaseTimer = undefined;
     if (sharedAvatarRoutes.get(key) !== entry || entry.consumers.size > 0) {
@@ -38,7 +43,7 @@ function releaseEntry(key: string, owner: symbol) {
     if (entry.blobUrl) {
       URL.revokeObjectURL(entry.blobUrl);
     }
-  }, 0);
+  }, releaseDelayMs);
 }
 
 async function fetchAvatarRoute(
@@ -83,6 +88,7 @@ async function fetchAvatarRoute(
   }
   if (!blobUrl) {
     if (notFound && cacheNotFound) {
+      entry.notFoundUntilMs = Date.now() + AUTHENTICATED_AVATAR_NOT_FOUND_CACHE_MS;
       return;
     }
     // Avatar misses stay retryable because a later identity publication may make the route valid.
@@ -137,11 +143,17 @@ export class AuthenticatedAvatarRouteLoader {
     const cacheNotFound = this.options.cacheNotFound === true;
     const key = avatarRouteKey(url, authTokens, cacheNotFound);
     let entry = sharedAvatarRoutes.get(key);
+    if (entry?.notFoundUntilMs && Date.now() >= entry.notFoundUntilMs) {
+      sharedAvatarRoutes.delete(key);
+      entry.controller.abort();
+      entry = undefined;
+    }
     if (!entry) {
       entry = {
         blobUrl: null,
         consumers: new Map(),
         controller: new AbortController(),
+        notFoundUntilMs: undefined,
         releaseTimer: undefined,
       };
       sharedAvatarRoutes.set(key, entry);

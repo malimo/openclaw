@@ -2,8 +2,45 @@ import { afterEach, expect, it, vi } from "vitest";
 import { AuthenticatedAvatarRouteLoader } from "./authenticated-avatar-route.ts";
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+it("shares a stable missing route across owners until its retry window expires", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce({ ok: false, status: 404 })
+    .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["avatar"]) });
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = vi.fn(() => "blob:retried-avatar");
+      static override revokeObjectURL = vi.fn();
+    },
+  );
+
+  const first = new AuthenticatedAvatarRouteLoader(vi.fn(), { cacheNotFound: true });
+  expect(first.resolve("/avatar/main", ["token"])).toBeNull();
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+  first.reset();
+
+  const second = new AuthenticatedAvatarRouteLoader(vi.fn(), { cacheNotFound: true });
+  expect(second.resolve("/avatar/main", ["token"])).toBeNull();
+  expect(fetchMock).toHaveBeenCalledOnce();
+  second.reset();
+
+  await vi.advanceTimersByTimeAsync(30_000);
+  const onUpdate = vi.fn();
+  const third = new AuthenticatedAvatarRouteLoader(onUpdate, { cacheNotFound: true });
+  expect(third.resolve("/avatar/main", ["token"])).toBeNull();
+  await vi.waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(third.resolve("/avatar/main", ["token"])).toBe("blob:retried-avatar");
+  third.reset();
 });
 
 it("shares pending fetches and revokes the resolved blob on reset", async () => {

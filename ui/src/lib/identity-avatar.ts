@@ -18,11 +18,13 @@ let appGatewayAuthHeader: string | null = null;
 
 const IDENTITY_AVATAR_CACHE_MAX_ENTRIES = 128;
 const IDENTITY_AVATAR_FETCH_TIMEOUT_MS = 30_000;
+const IDENTITY_AVATAR_MISS_CACHE_MS = 30_000;
 const IDENTITY_AVATAR_MIME_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 
 type CachedIdentityAvatar = {
   blobUrl: string | null;
   loaded: boolean;
+  retryAtMs: number | null;
   promise: Promise<string | null>;
 };
 
@@ -43,11 +45,15 @@ function trimIdentityAvatarCache(protectedEntry?: CachedIdentityAvatar): void {
     for (const [key, entry] of identityAvatarCache) {
       // Pending consumers still need their eventual blob. Only completed LRU
       // entries may be evicted; the request currently resolving stays valid.
-      if (!entry.blobUrl || !entry.loaded || entry === protectedEntry) {
+      const pending = !entry.blobUrl && entry.retryAtMs === null;
+      const unsettledImage = entry.blobUrl !== null && !entry.loaded;
+      if (pending || unsettledImage || entry === protectedEntry) {
         continue;
       }
       identityAvatarCache.delete(key);
-      URL.revokeObjectURL(entry.blobUrl);
+      if (entry.blobUrl) {
+        URL.revokeObjectURL(entry.blobUrl);
+      }
       evicted = true;
       break;
     }
@@ -132,16 +138,23 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> {
   const cacheKey = url;
   const cached = identityAvatarCache.get(cacheKey);
   if (cached) {
-    // Map order is the LRU order; concurrent roster, profile, and chat views
-    // must share both the authenticated request and its resulting blob.
-    identityAvatarCache.delete(cacheKey);
-    identityAvatarCache.set(cacheKey, cached);
-    return cached.loaded && cached.blobUrl ? cached.blobUrl : cached.promise;
+    if (cached.retryAtMs !== null && Date.now() >= cached.retryAtMs) {
+      identityAvatarCache.delete(cacheKey);
+    } else {
+      // Map order is the LRU order; concurrent roster, profile, and chat views
+      // must share both the authenticated request and its resulting blob. A
+      // short negative-cache window also prevents every retained chat pane from
+      // refetching the same absent profile image during rapid navigation.
+      identityAvatarCache.delete(cacheKey);
+      identityAvatarCache.set(cacheKey, cached);
+      return cached.loaded && cached.blobUrl ? cached.blobUrl : cached.promise;
+    }
   }
 
   const entry: CachedIdentityAvatar = {
     blobUrl: null,
     loaded: false,
+    retryAtMs: null,
     promise: Promise.resolve(null),
   };
   const authHeader = appGatewayAuthHeader;
@@ -153,6 +166,9 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> {
         signal: AbortSignal.timeout(IDENTITY_AVATAR_FETCH_TIMEOUT_MS),
       });
       if (!response.ok) {
+        if (response.status === 404) {
+          entry.retryAtMs = Date.now() + IDENTITY_AVATAR_MISS_CACHE_MS;
+        }
         return null;
       }
       const blob = await response.blob();
@@ -176,8 +192,13 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> {
     } catch {
       return null;
     } finally {
-      if (!entry.blobUrl && identityAvatarCache.get(cacheKey) === entry) {
-        // Transient failures and uncached 404s must not hide a later upload.
+      if (
+        !entry.blobUrl &&
+        entry.retryAtMs === null &&
+        identityAvatarCache.get(cacheKey) === entry
+      ) {
+        // Authentication, transport, and invalid-image failures stay immediately retryable.
+        // Profile updates publish revisioned URLs, so a real upload bypasses a cached 404.
         identityAvatarCache.delete(cacheKey);
       }
     }
