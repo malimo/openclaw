@@ -27,6 +27,12 @@ function workerUrl(): URL {
   });
 }
 
+function resolveSourceWorkerExecArgv(): string[] {
+  const tsxApiUrl = import.meta.resolve("tsx/esm/api");
+  const registerTsx = `import { register } from ${JSON.stringify(tsxApiUrl)}; register();`;
+  return ["--import", `data:text/javascript,${encodeURIComponent(registerTsx)}`];
+}
+
 function stopWorker(error: Error): void {
   const active = worker;
   worker = undefined;
@@ -48,7 +54,7 @@ function ensureWorker(): Worker {
   const resolvedUrl = workerUrl();
   const active = new Worker(
     resolvedUrl,
-    resolvedUrl.pathname.endsWith(".ts") ? { execArgv: ["--import", "tsx"] } : undefined,
+    resolvedUrl.pathname.endsWith(".ts") ? { execArgv: resolveSourceWorkerExecArgv() } : undefined,
   );
   active.unref();
   active.on("message", (message: SessionTouchedFilesWorkerResult) => {
