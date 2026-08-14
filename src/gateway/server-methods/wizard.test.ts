@@ -390,12 +390,15 @@ describe("wizard setup ownership", () => {
 
   it("blocks a replacement wizard until the cancelled runner settles", async () => {
     const runnerSettled = createDeferred();
+    const replacementRunnerSettled = createDeferred();
+    let runnerCount = 0;
     const tracker = createWizardSessionTracker();
     const context = {
       ...tracker,
       wizardRunner: async (_opts: unknown, _runtime: RuntimeEnv, prompter: WizardPrompter) => {
         prompter.progress("working");
-        await runnerSettled.promise;
+        runnerCount += 1;
+        await (runnerCount === 1 ? runnerSettled.promise : replacementRunnerSettled.promise);
       },
     };
 
@@ -457,11 +460,14 @@ describe("wizard setup ownership", () => {
     } as never);
     expect(replacementRespond.mock.calls[0]?.[1]).toMatchObject({ status: "running" });
 
+    replacementRunnerSettled.resolve();
     await cancelWizardSessions(tracker.wizardSessions);
   });
 
   it("settles setup admission before returning a terminal wizard status", async () => {
     const runnerSettled = createDeferred();
+    const replacementRunnerSettled = createDeferred();
+    let runnerCount = 0;
     const releaseSetupTargetLock = createDeferred();
     const setupTargetLockReleaseReached = createDeferred();
     setupTargetLock.beforeRelease = releaseSetupTargetLock.promise;
@@ -471,7 +477,8 @@ describe("wizard setup ownership", () => {
       ...tracker,
       wizardRunner: async (_opts: unknown, _runtime: RuntimeEnv, prompter: WizardPrompter) => {
         prompter.progress("working");
-        await runnerSettled.promise;
+        runnerCount += 1;
+        await (runnerCount === 1 ? runnerSettled.promise : replacementRunnerSettled.promise);
       },
     };
     let admittedSession: import("../../wizard/session.js").WizardSession | undefined;
@@ -531,6 +538,7 @@ describe("wizard setup ownership", () => {
       );
     } finally {
       runnerSettled.resolve();
+      replacementRunnerSettled.resolve();
       releaseSetupTargetLock.resolve();
       if (admittedSession) {
         await whenAdmittedWizardSessionSettled(admittedSession);
