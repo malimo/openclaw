@@ -21,7 +21,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessions/tools/path-utils.js";
-import { runGit } from "../../agents/worktrees/git.js";
+import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -556,12 +556,7 @@ async function loadGitCheckoutStatus(diffCwd: string | undefined): Promise<boole
   if (!diffCwd) {
     return undefined;
   }
-  try {
-    const result = await runGit(diffCwd, ["rev-parse", "--show-toplevel"]);
-    return result.code === 0 && Boolean(result.stdout.trim());
-  } catch {
-    return false;
-  }
+  return insideGitCheckout(diffCwd);
 }
 
 async function buildWorkspaceStatus(params: {
