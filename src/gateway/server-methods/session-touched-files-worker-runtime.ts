@@ -221,7 +221,7 @@ export async function closeSessionTouchedFilesWorker(): Promise<void> {
         try {
           await awaitStoppingWorker(true);
         } catch (error) {
-          reject(error);
+          reject(error instanceof Error ? error : new Error(String(error)));
           return;
         }
       }
@@ -242,12 +242,6 @@ export async function closeSessionTouchedFilesWorker(): Promise<void> {
     closing = undefined;
   });
   return await closing;
-}
-
-export async function shutdownSessionTouchedFilesWorker(): Promise<void> {
-  acceptingRequests = false;
-  gatewayOwners = 0;
-  await closeSessionTouchedFilesWorker();
 }
 
 /** Own worker admission for exactly one Gateway lifecycle. */
@@ -274,10 +268,4 @@ export async function terminateSessionTouchedFilesWorkerForTest(): Promise<void>
   if (cleanupError) {
     throw cleanupError;
   }
-}
-
-export async function resetSessionTouchedFilesWorkerRuntimeForTest(): Promise<void> {
-  await closeSessionTouchedFilesWorker();
-  gatewayOwners = 0;
-  acceptingRequests = true;
 }

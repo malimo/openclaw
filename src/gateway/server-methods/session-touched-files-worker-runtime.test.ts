@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.js";
 import * as agentDatabaseLease from "../../state/openclaw-agent-db-lease.js";
 import {
@@ -17,15 +17,19 @@ import {
   acquireSessionTouchedFilesWorkerForGateway,
   closeSessionTouchedFilesWorker,
   loadSessionTouchedFilesInWorker,
-  resetSessionTouchedFilesWorkerRuntimeForTest,
-  shutdownSessionTouchedFilesWorker,
   terminateSessionTouchedFilesWorkerForTest,
 } from "./session-touched-files-worker-runtime.js";
 
 const temporaryDirectories: string[] = [];
+let releaseGatewayWorker: (() => Promise<void>) | undefined;
+
+beforeEach(() => {
+  releaseGatewayWorker = acquireSessionTouchedFilesWorkerForGateway();
+});
 
 afterEach(async () => {
-  await resetSessionTouchedFilesWorkerRuntimeForTest();
+  await releaseGatewayWorker?.();
+  releaseGatewayWorker = undefined;
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   for (const directory of temporaryDirectories.splice(0)) {
@@ -122,7 +126,6 @@ describe("session touched-files worker runtime", () => {
       message: { role: "assistant", content: [] },
     });
     await loadSessionTouchedFilesInWorker(scope, `main\0worker-terminate-session\0${storePath}`);
-    const terminateWorker = Worker.prototype.terminate;
     let releaseTermination: () => void = () => {};
     const terminationGate = new Promise<void>((resolve) => {
       releaseTermination = resolve;
@@ -130,7 +133,10 @@ describe("session touched-files worker runtime", () => {
     const terminateSpy = vi
       .spyOn(Worker.prototype, "terminate")
       .mockImplementation(function (this: Worker) {
-        return terminationGate.then(() => terminateWorker.call(this));
+        return terminationGate.then(() => {
+          terminateSpy.mockRestore();
+          return this.terminate();
+        });
       });
     try {
       const termination = terminateSessionTouchedFilesWorkerForTest();
@@ -156,7 +162,10 @@ describe("session touched-files worker runtime", () => {
     const secondTerminateSpy = vi
       .spyOn(Worker.prototype, "terminate")
       .mockImplementation(function (this: Worker) {
-        return secondTerminationGate.then(() => terminateWorker.call(this));
+        return secondTerminationGate.then(() => {
+          secondTerminateSpy.mockRestore();
+          return this.terminate();
+        });
       });
     try {
       let closeCompleted = false;
@@ -233,22 +242,6 @@ describe("session touched-files worker runtime", () => {
     },
   );
 
-  it("rejects worker recreation after Gateway shutdown starts", async () => {
-    const shutdown = shutdownSessionTouchedFilesWorker();
-
-    await expect(
-      loadSessionTouchedFilesInWorker(
-        {
-          agentId: "main",
-          sessionId: "late-session",
-          sessionKey: "agent:main:late-session",
-        },
-        "main\0late-session",
-      ),
-    ).rejects.toThrow("worker is shutting down");
-    await shutdown;
-  });
-
   it("re-enables worker admission for a restarted Gateway", async () => {
     const directory = fs.mkdtempSync(
       path.join(fs.realpathSync(os.tmpdir()), "openclaw-touched-worker-restart-"),
@@ -266,8 +259,8 @@ describe("session touched-files worker runtime", () => {
     await appendTranscriptMessage(restartedScope, {
       message: { role: "assistant", content: [] },
     });
-    const closeFirstGateway = acquireSessionTouchedFilesWorkerForGateway();
-    await closeFirstGateway();
+    await releaseGatewayWorker?.();
+    releaseGatewayWorker = undefined;
 
     await expect(
       loadSessionTouchedFilesInWorker(
@@ -280,10 +273,9 @@ describe("session touched-files worker runtime", () => {
       ),
     ).rejects.toThrow("worker is shutting down");
 
-    const closeRestartedGateway = acquireSessionTouchedFilesWorkerForGateway();
+    releaseGatewayWorker = acquireSessionTouchedFilesWorkerForGateway();
     await expect(
       loadSessionTouchedFilesInWorker(restartedScope, `main\0restarted-session\0${storePath}`),
     ).resolves.toEqual([]);
-    await closeRestartedGateway();
   });
 });

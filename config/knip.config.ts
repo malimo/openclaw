@@ -405,6 +405,9 @@ const config = {
     "src/gateway/board-view-ticket.ts": ["exports"],
     // Focused startup tests consume this explicit seam; production imports only the bootstrap.
     "src/gateway/server-startup-bootstrap.ts": ["exports"],
+    // Forced worker termination is an explicit test seam; normal production shutdown
+    // owns the worker through acquireSessionTouchedFilesWorkerForGateway.
+    "src/gateway/server-methods/session-touched-files-worker-runtime.ts": ["exports"],
     // Registry facades retain direct registration/reset compatibility seams used by focused
     // tests; the full-tree scan still audits every named export against those consumers.
     "src/agents/harness/registry.ts": ["exports"],

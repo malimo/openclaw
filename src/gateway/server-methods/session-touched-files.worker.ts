@@ -13,7 +13,7 @@ export type SessionTouchedFilesWorkerRequest = {
   cacheKey: string;
 };
 
-export type SessionTouchedFilesWorkerMessage =
+type SessionTouchedFilesWorkerMessage =
   | SessionTouchedFilesWorkerRequest
   | { type: "shutdown" };
 
