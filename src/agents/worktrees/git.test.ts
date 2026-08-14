@@ -7,6 +7,7 @@ import {
   hasSelfContainedGitMetadata,
   insideGitCheckout,
   requireGit,
+  runGit,
 } from "./git.js";
 
 describe("Git checkout discovery", () => {
@@ -111,6 +112,16 @@ describe("Git checkout discovery", () => {
     await requireGit(mainCheckout, ["worktree", "add", "--detach", linkedCheckout, "HEAD"]);
     expect(findGitCheckoutRoot(linkedCheckout)).toBe(linkedCheckout);
     expect(insideGitCheckout(linkedCheckout)).toBe(true);
+
+    await fs.rename(path.join(mainCheckout, ".git", "refs"), path.join(root, "saved-refs"));
+    await expect(runGit(mainCheckout, ["rev-parse", "--show-toplevel"])).resolves.toMatchObject({
+      code: 128,
+    });
+    await expect(runGit(linkedCheckout, ["rev-parse", "--show-toplevel"])).resolves.toMatchObject({
+      code: 128,
+    });
+    expect(insideGitCheckout(mainCheckout)).toBe(false);
+    expect(insideGitCheckout(linkedCheckout)).toBe(false);
   });
 
   it("distinguishes contained metadata from linked checkout pointers", async () => {
