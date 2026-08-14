@@ -23,6 +23,7 @@ let workerLeaseNamespace: string | undefined;
 const workerLeaseEnvironments = new Map<string, NodeJS.ProcessEnv | undefined>();
 let closing: Promise<void> | undefined;
 let stopping: Promise<Error | undefined> | undefined;
+let notifyForcedStop: (() => void) | undefined;
 let acceptingRequests = true;
 let gatewayOwners = 0;
 let nextRequestId = 1;
@@ -82,13 +83,32 @@ function stopWorker(error: Error): Promise<Error | undefined> {
   }
   const activeStop = stopWorkerNow(error);
   stopping = activeStop;
-  const clearStopping = () => {
+  void activeStop.then(
+    () => notifyForcedStop?.(),
+    () => notifyForcedStop?.(),
+  );
+  return activeStop;
+}
+
+async function awaitStoppingWorker(consumeError: boolean): Promise<void> {
+  const activeStop = stopping;
+  if (!activeStop) {
+    return;
+  }
+  try {
+    const cleanupError = await activeStop;
+    if (cleanupError) {
+      throw cleanupError;
+    }
     if (stopping === activeStop) {
       stopping = undefined;
     }
-  };
-  void activeStop.then(clearStopping, clearStopping);
-  return activeStop;
+  } catch (error) {
+    if (consumeError && stopping === activeStop) {
+      stopping = undefined;
+    }
+    throw error;
+  }
 }
 
 function ensureWorker(): Worker {
@@ -141,7 +161,7 @@ export async function loadSessionTouchedFilesInWorker(
     throw new Error("session touched-files worker is shutting down");
   }
   await closing;
-  await stopping;
+  await awaitStoppingWorker(false);
   if (!acceptingRequests) {
     throw new Error("session touched-files worker is shutting down");
   }
@@ -170,20 +190,13 @@ export async function loadSessionTouchedFilesInWorker(
 
 export async function closeSessionTouchedFilesWorker(): Promise<void> {
   if (stopping) {
-    await stopping;
+    await awaitStoppingWorker(true);
   }
   if (closing) {
     return await closing;
   }
   const active = worker;
   if (!active) {
-    const activeStop = stopping;
-    if (activeStop) {
-      const cleanupError = await activeStop;
-      if (cleanupError) {
-        throw cleanupError;
-      }
-    }
     return;
   }
   closing = new Promise<void>((resolve, reject) => {
@@ -195,16 +208,20 @@ export async function closeSessionTouchedFilesWorker(): Promise<void> {
       settled = true;
       clearTimeout(timeout);
       active.removeListener("message", onMessage);
+      if (notifyForcedStop === onForcedStop) {
+        notifyForcedStop = undefined;
+      }
       if (worker === active) {
         const cleanupError = await stopWorkerNow(new Error("session touched-files worker closed"));
         if (cleanupError) {
           reject(cleanupError);
           return;
         }
-      } else if (stopping) {
-        const cleanupError = await stopping;
-        if (cleanupError) {
-          reject(cleanupError);
+      } else {
+        try {
+          await awaitStoppingWorker(true);
+        } catch (error) {
+          reject(error);
           return;
         }
       }
@@ -215,8 +232,10 @@ export async function closeSessionTouchedFilesWorker(): Promise<void> {
         void finish();
       }
     };
+    const onForcedStop = () => void finish();
     const timeout = setTimeout(() => void finish(), SHUTDOWN_TIMEOUT_MS);
     timeout.unref();
+    notifyForcedStop = onForcedStop;
     active.on("message", onMessage);
     active.postMessage({ type: "shutdown" }, []);
   }).finally(() => {

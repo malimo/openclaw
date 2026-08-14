@@ -4,7 +4,7 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.js";
-import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
+import * as agentDatabaseLease from "../../state/openclaw-agent-db-lease.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   resolveOpenClawAgentSqlitePath,
@@ -175,8 +175,63 @@ describe("session touched-files worker runtime", () => {
     }
     closeOpenClawAgentDatabasesForTest();
 
-    expect(() => assertNoOpenClawAgentDatabaseLeases("main", { env })).not.toThrow();
+    expect(() =>
+      agentDatabaseLease.assertNoOpenClawAgentDatabaseLeases("main", { env }),
+    ).not.toThrow();
   });
+
+  it.each(["forced stop starts first", "graceful close starts first"] as const)(
+    "propagates cleanup failure when %s",
+    async (ordering) => {
+      const directory = fs.mkdtempSync(
+        path.join(fs.realpathSync(os.tmpdir()), "openclaw-touched-worker-cleanup-error-"),
+      );
+      temporaryDirectories.push(directory);
+      const env = { ...process.env, OPENCLAW_STATE_DIR: directory };
+      openOpenClawStateDatabase({ env });
+      const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+      const scope = {
+        agentId: "main",
+        env,
+        sessionId: "worker-cleanup-error-session",
+        sessionKey: "agent:main:worker-cleanup-error-session",
+      };
+      await appendTranscriptMessage(scope, {
+        message: { role: "assistant", content: [] },
+      });
+      await loadSessionTouchedFilesInWorker(
+        scope,
+        `main\0worker-cleanup-error-session\0${storePath}`,
+      );
+      const releaseSpy = vi
+        .spyOn(agentDatabaseLease, "releaseOpenClawAgentDatabaseLeasesByNamespace")
+        .mockImplementationOnce(() => {
+          throw new Error("lease cleanup failed for test");
+        });
+      try {
+        let close: Promise<void>;
+        let terminationResult: Promise<unknown>;
+        if (ordering === "forced stop starts first") {
+          terminationResult = terminateSessionTouchedFilesWorkerForTest().catch(
+            (error: unknown) => error,
+          );
+          close = closeSessionTouchedFilesWorker();
+        } else {
+          close = closeSessionTouchedFilesWorker();
+          terminationResult = terminateSessionTouchedFilesWorkerForTest().catch(
+            (error: unknown) => error,
+          );
+        }
+
+        await expect(close).rejects.toThrow(
+          "failed to release terminated session worker database leases",
+        );
+        await expect(terminationResult).resolves.toBeInstanceOf(Error);
+      } finally {
+        releaseSpy.mockRestore();
+      }
+    },
+  );
 
   it("rejects worker recreation after Gateway shutdown starts", async () => {
     const shutdown = shutdownSessionTouchedFilesWorker();
