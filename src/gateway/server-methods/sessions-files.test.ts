@@ -170,6 +170,54 @@ describe("sessions.files RPC handlers", () => {
     expect(hoisted.runGit).toHaveBeenCalledOnce();
   });
 
+  it("keeps cold checkout probes coalesced under cache pressure", async () => {
+    let activeProbes = 0;
+    let peakActiveProbes = 0;
+    let releaseProbes: () => void = () => {};
+    const probeGate = new Promise<void>((resolve) => {
+      releaseProbes = resolve;
+    });
+    hoisted.loadSessionEntry.mockImplementation((sessionKey: string) => {
+      const sessionId = sessionKey.split(":").at(-1) ?? "main";
+      const sessionRoot = path.join(workspaceRoot, sessionId);
+      return {
+        agentId: "main",
+        canonicalKey: sessionKey,
+        cfg: {},
+        storePath: path.join(workspaceRoot, ".sessions.json"),
+        entry: {
+          sessionId,
+          sessionFile: `${sessionId}.jsonl`,
+          spawnedCwd: sessionRoot,
+        },
+      };
+    });
+    hoisted.runGit.mockImplementation(async (cwd: string) => {
+      activeProbes += 1;
+      peakActiveProbes = Math.max(peakActiveProbes, activeProbes);
+      await probeGate;
+      activeProbes -= 1;
+      return { code: 0, stderr: "", stdout: `${cwd}\n` };
+    });
+
+    const coldRequests = Array.from({ length: 129 }, (_, index) =>
+      invokeSessionFilesHandler("sessions.workspace.status", {
+        sessionKey: `agent:main:pressure-${String(index)}`,
+      }),
+    );
+    const duplicateFirstRequest = invokeSessionFilesHandler("sessions.workspace.status", {
+      sessionKey: "agent:main:pressure-0",
+    });
+
+    await vi.waitFor(() => expect(hoisted.runGit).toHaveBeenCalledTimes(4));
+    releaseProbes();
+    const payloads = await Promise.all([...coldRequests, duplicateFirstRequest]);
+
+    expect(payloads).toHaveLength(130);
+    expect(hoisted.runGit).toHaveBeenCalledTimes(129);
+    expect(peakActiveProbes).toBe(4);
+  });
+
   it("uses the persisted fixed-store owner for a bare session workspace", async () => {
     const cfg = {
       session: { store: path.join(workspaceRoot, "shared.sqlite"), scope: "global" },

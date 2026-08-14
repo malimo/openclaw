@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import pLimit from "p-limit";
 import {
   ErrorCodes,
   errorShape,
@@ -78,10 +79,11 @@ const MAX_SEARCH_ENTRIES = 500;
 const MAX_SEARCH_VISITED_ENTRIES = 5_000;
 const GIT_CHECKOUT_STATUS_CACHE_MAX_ENTRIES = 128;
 const GIT_CHECKOUT_STATUS_CACHE_TTL_MS = 5_000;
-type GitCheckoutStatusCacheEntry =
-  | { expiresAtMs: number; value: true }
-  | { promise: Promise<boolean> };
+const GIT_CHECKOUT_STATUS_PROBE_CONCURRENCY = 4;
+type GitCheckoutStatusCacheEntry = { expiresAtMs: number; value: true };
 const gitCheckoutStatusCache = new Map<string, GitCheckoutStatusCacheEntry>();
+const gitCheckoutStatusProbes = new Map<string, Promise<boolean>>();
+const limitGitCheckoutStatusProbe = pLimit(GIT_CHECKOUT_STATUS_PROBE_CONCURRENCY);
 // Matches file-type's documented default buffer sample while keeping metadata
 // classification independent from the 256 KiB inline-content cap.
 const MIME_SNIFF_PREFIX_BYTES = 4_100;
@@ -566,9 +568,6 @@ async function loadGitCheckoutStatus(diffCwd: string | undefined): Promise<boole
   const cacheKey = path.resolve(diffCwd);
   const cached = gitCheckoutStatusCache.get(cacheKey);
   if (cached) {
-    if ("promise" in cached) {
-      return await cached.promise;
-    }
     if (cached.expiresAtMs > Date.now()) {
       gitCheckoutStatusCache.delete(cacheKey);
       gitCheckoutStatusCache.set(cacheKey, cached);
@@ -577,20 +576,22 @@ async function loadGitCheckoutStatus(diffCwd: string | undefined): Promise<boole
     gitCheckoutStatusCache.delete(cacheKey);
   }
 
-  const promise = (async () => {
+  const activeProbe = gitCheckoutStatusProbes.get(cacheKey);
+  if (activeProbe) {
+    return await activeProbe;
+  }
+
+  const promise = limitGitCheckoutStatusProbe(async () => {
     try {
       const result = await runGit(cacheKey, ["rev-parse", "--show-toplevel"]);
       return result.code === 0 && Boolean(result.stdout.trim());
     } catch {
       return false;
     }
-  })();
-  gitCheckoutStatusCache.set(cacheKey, { promise });
-  pruneMapToMaxSize(gitCheckoutStatusCache, GIT_CHECKOUT_STATUS_CACHE_MAX_ENTRIES);
-  const value = await promise;
-  const current = gitCheckoutStatusCache.get(cacheKey);
-  if (current && "promise" in current && current.promise === promise) {
-    gitCheckoutStatusCache.delete(cacheKey);
+  });
+  gitCheckoutStatusProbes.set(cacheKey, promise);
+  try {
+    const value = await promise;
     if (value) {
       gitCheckoutStatusCache.set(cacheKey, {
         expiresAtMs: Date.now() + GIT_CHECKOUT_STATUS_CACHE_TTL_MS,
@@ -598,8 +599,12 @@ async function loadGitCheckoutStatus(diffCwd: string | undefined): Promise<boole
       });
       pruneMapToMaxSize(gitCheckoutStatusCache, GIT_CHECKOUT_STATUS_CACHE_MAX_ENTRIES);
     }
+    return value;
+  } finally {
+    if (gitCheckoutStatusProbes.get(cacheKey) === promise) {
+      gitCheckoutStatusProbes.delete(cacheKey);
+    }
   }
-  return value;
 }
 
 async function buildWorkspaceStatus(params: {
