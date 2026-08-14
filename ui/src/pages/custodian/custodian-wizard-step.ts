@@ -104,7 +104,12 @@ export function replaceCustodianQrStep(
   messages: readonly CustodianMessage[],
   step: WizardStep,
 ): CustodianMessage[] {
-  return messages.map((message) => (message.step?.id === step.id ? { ...message, step } : message));
+  const activeMessage = messages.findLast((message) => message.step?.id === step.id);
+  // Gateway step ids may be reused after session invalidation. The newest transcript row owns
+  // the live presentation; older scrubbed rows must never regain credential bytes.
+  return messages.map((message) =>
+    message.id === activeMessage?.id ? { ...message, step } : message,
+  );
 }
 
 export function findCustodianQrStep(

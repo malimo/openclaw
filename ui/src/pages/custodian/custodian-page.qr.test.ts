@@ -8,9 +8,10 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
 const QR_DATA_URL = "data:image/png;base64,AAAA";
+const FRESH_QR_DATA_URL = "data:image/png;base64,BBBB";
 const SESSION_ID = "qr-session";
 
-function qrResult(expiresInMs = 60_000, stepId = "qr-step") {
+function qrResult(expiresInMs = 60_000, stepId = "qr-step", qrDataUrl = QR_DATA_URL) {
   return {
     sessionId: SESSION_ID,
     reply: "Scan this code and approve the device.",
@@ -21,7 +22,7 @@ function qrResult(expiresInMs = 60_000, stepId = "qr-step") {
       type: "qr" as const,
       title: "Link a device",
       message: "Scan this QR code and approve the device.",
-      qrDataUrl: QR_DATA_URL,
+      qrDataUrl,
       expiresInMs,
       executor: "client" as const,
     },
@@ -331,6 +332,53 @@ describe("custodian QR wizard step", () => {
     expect(request.mock.calls[2]?.[1]?.sessionId).not.toBe(SESSION_ID);
     expect(page.textContent).toContain("Fresh session ready.");
     expect(page.store.messages.some((message) => message.step?.qrDataUrl)).toBe(false);
+  });
+
+  it("keeps a reused QR step id bound to its fresh transcript row", async () => {
+    vi.useFakeTimers();
+    const freshQr = {
+      ...qrResult(60_000, "qr-step", FRESH_QR_DATA_URL),
+      sessionId: "replacement-session",
+    };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(qrResult())
+      .mockRejectedValueOnce(
+        new GatewayProtocolRequestError({
+          code: "INVALID_REQUEST",
+          message: "QR session was evicted.",
+          details: buildSystemAgentSessionInvalidatedErrorDetails(),
+        }),
+      )
+      .mockResolvedValueOnce(freshQr)
+      .mockResolvedValueOnce({ ...freshQr, step: { ...freshQr.step, expiresInMs: 30_000 } });
+    const { page } = await mountPage(createContext(request).context);
+    await vi.advanceTimersByTimeAsync(0);
+    const staleMessageId = page.store.messages.find(
+      (message) => message.step?.id === "qr-step",
+    )?.id;
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await page.updateComplete;
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("pollStepId");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await page.updateComplete;
+
+    expect(request).toHaveBeenCalledTimes(4);
+    const qrMessages = page.store.messages.filter((message) => message.step?.id === "qr-step");
+    expect(qrMessages).toHaveLength(2);
+    expect(qrMessages.find((message) => message.id === staleMessageId)?.step).toMatchObject({
+      expiresInMs: 0,
+    });
+    expect(qrMessages.find((message) => message.id === staleMessageId)?.step).not.toHaveProperty(
+      "qrDataUrl",
+    );
+    expect(qrMessages.at(-1)?.step).toMatchObject({
+      qrDataUrl: FRESH_QR_DATA_URL,
+      expiresInMs: 30_000,
+    });
   });
 
   it("scrubs expired image bytes while a result poll is still pending", async () => {
