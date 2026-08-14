@@ -51,7 +51,7 @@ export function resolveGitDirFromMarker(repoRoot: string): string | null {
       return null;
     }
     const raw = fs.readFileSync(gitPath, "utf-8");
-    const match = raw.match(/gitdir:\s*(.+)/i);
+    const match = /^gitdir: (.+)$/u.exec(raw.trimEnd());
     if (!match?.[1]) {
       return null;
     }

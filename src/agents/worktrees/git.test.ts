@@ -32,10 +32,23 @@ describe("Git checkout discovery", () => {
   it("rejects malformed and stale linked checkout pointers", async () => {
     const root = tempDirs.make("openclaw-invalid-git-pointer-");
     const emptyTarget = path.join(root, "empty-target");
+    const validTarget = path.join(root, "valid-target");
     await fs.mkdir(emptyTarget);
+    await fs.mkdir(validTarget);
+    await requireGit(validTarget, ["init", "--bare"]);
 
     await fs.writeFile(path.join(root, ".git"), "not-a-gitdir-pointer\n", "utf8");
     expect(findGitCheckoutRoot(root)).toBeNull();
+
+    for (const malformed of [
+      `junk\ngitdir: ${validTarget}\n`,
+      `gitdir: ${validTarget}\njunk\n`,
+      `GITDIR: ${validTarget}\n`,
+      `gitdir:${validTarget}\n`,
+    ]) {
+      await fs.writeFile(path.join(root, ".git"), malformed, "utf8");
+      expect(findGitCheckoutRoot(root)).toBeNull();
+    }
 
     await fs.writeFile(path.join(root, ".git"), "gitdir: /missing/openclaw-worktree\n", "utf8");
     expect(findGitCheckoutRoot(root)).toBeNull();
