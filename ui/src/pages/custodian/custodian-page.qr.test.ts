@@ -218,6 +218,29 @@ describe("custodian QR wizard step", () => {
     expect(page.textContent).toContain("Signal is configured.");
   });
 
+  it("resumes the same QR session when replacement credentials rotate", async () => {
+    vi.useFakeTimers();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(qrResult())
+      .mockResolvedValueOnce(terminalResult());
+    const { context, setGatewaySnapshot, setGatewayToken } = createContext(request);
+    const { page } = await mountPage(context);
+    await vi.advanceTimersByTimeAsync(0);
+
+    setGatewayToken("rotated-token");
+    setGatewaySnapshot({
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+    await page.updateComplete;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await page.updateComplete;
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]?.[1]).toEqual({ sessionId: SESSION_ID, pollStepId: "qr-step" });
+    expect(page.textContent).toContain("Signal is configured.");
+  });
+
   it("starts fresh instead of polling when the authenticated owner changes", async () => {
     vi.useFakeTimers();
     const request = vi

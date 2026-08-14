@@ -71,9 +71,8 @@ export function resolveCustodianSessionOwnershipKey(
     return undefined;
   }
   const recoveryScope = serverScope || client?.recoveryScope.trim();
-  const { gatewayUrl, token, password, bootstrapToken } = context.gateway.connection;
   return recoveryScope
-    ? JSON.stringify([gatewayUrl, token, password, bootstrapToken, recoveryScope])
+    ? JSON.stringify([context.gateway.connection.gatewayUrl, recoveryScope])
     : null;
 }
 
