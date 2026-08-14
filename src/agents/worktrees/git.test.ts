@@ -15,7 +15,7 @@ describe("Git checkout discovery", () => {
   it("returns the nearest checkout root for nested paths", async () => {
     const root = tempDirs.make("openclaw-git-root-");
     const nested = path.join(root, "packages", "nested");
-    await fs.mkdir(path.join(root, ".git"));
+    await requireGit(root, ["init"]);
     await fs.mkdir(nested, { recursive: true });
 
     expect(findGitCheckoutRoot(nested)).toBe(root);
@@ -31,11 +31,24 @@ describe("Git checkout discovery", () => {
 
   it("rejects malformed and stale linked checkout pointers", async () => {
     const root = tempDirs.make("openclaw-invalid-git-pointer-");
+    const emptyTarget = path.join(root, "empty-target");
+    await fs.mkdir(emptyTarget);
 
     await fs.writeFile(path.join(root, ".git"), "not-a-gitdir-pointer\n", "utf8");
     expect(findGitCheckoutRoot(root)).toBeNull();
 
     await fs.writeFile(path.join(root, ".git"), "gitdir: /missing/openclaw-worktree\n", "utf8");
+    expect(findGitCheckoutRoot(root)).toBeNull();
+
+    await fs.writeFile(path.join(root, ".git"), `gitdir: ${emptyTarget}\n`, "utf8");
+    expect(findGitCheckoutRoot(root)).toBeNull();
+    expect(insideGitCheckout(root)).toBe(false);
+  });
+
+  it("rejects an incomplete .git directory", async () => {
+    const root = tempDirs.make("openclaw-incomplete-git-dir-");
+    await fs.mkdir(path.join(root, ".git"));
+
     expect(findGitCheckoutRoot(root)).toBeNull();
     expect(insideGitCheckout(root)).toBe(false);
   });

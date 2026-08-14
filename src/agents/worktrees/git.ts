@@ -7,7 +7,7 @@ import {
   requireGitCommandBuffer,
   requireGitCommandRaw,
 } from "../../infra/git-exec.js";
-import { resolveGitDirFromMarker } from "../../infra/git-root.js";
+import { isValidGitDirectory, resolveGitDirFromMarker } from "../../infra/git-root.js";
 
 export type GitResult = {
   stdout: string;
@@ -96,7 +96,8 @@ export async function listGitWorktrees(repoRoot: string): Promise<WorktreeListEn
 export function findGitCheckoutRoot(start: string): string | null {
   let current = path.resolve(start);
   for (;;) {
-    if (resolveGitDirFromMarker(current)) {
+    const gitDir = resolveGitDirFromMarker(current);
+    if (gitDir && isValidGitDirectory(gitDir)) {
       return current;
     }
     const parent = path.dirname(current);

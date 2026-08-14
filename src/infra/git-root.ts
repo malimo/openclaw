@@ -55,11 +55,60 @@ export function resolveGitDirFromMarker(repoRoot: string): string | null {
     if (!match?.[1]) {
       return null;
     }
-    const gitDir = path.resolve(repoRoot, match[1].trim());
-    return fs.statSync(gitDir).isDirectory() ? gitDir : null;
+    return path.resolve(repoRoot, match[1].trim());
   } catch {
     return null;
   }
+}
+
+function isDirectory(target: string): boolean {
+  try {
+    return fs.statSync(target).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function hasValidGitHead(gitDir: string): boolean {
+  const headPath = path.join(gitDir, "HEAD");
+  try {
+    const stat = fs.lstatSync(headPath);
+    if (stat.isSymbolicLink()) {
+      return fs.readlinkSync(headPath).startsWith("refs/");
+    }
+    if (!stat.isFile()) {
+      return false;
+    }
+    const head = fs.readFileSync(headPath, "utf8").trim();
+    return /^ref:\s*refs\/.+/u.test(head) || /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(head);
+  } catch {
+    return false;
+  }
+}
+
+function resolveGitCommonDir(gitDir: string): string | null {
+  const marker = path.join(gitDir, "commondir");
+  try {
+    const commonDir = fs.readFileSync(marker, "utf8").trim();
+    return commonDir ? path.resolve(gitDir, commonDir) : null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return gitDir;
+    }
+    return null;
+  }
+}
+
+export function isValidGitDirectory(gitDir: string): boolean {
+  if (!isDirectory(gitDir) || !hasValidGitHead(gitDir)) {
+    return false;
+  }
+  const commonDir = resolveGitCommonDir(gitDir);
+  return (
+    commonDir !== null &&
+    isDirectory(path.join(commonDir, "objects")) &&
+    isDirectory(path.join(commonDir, "refs"))
+  );
 }
 
 export function resolveGitHeadPath(
