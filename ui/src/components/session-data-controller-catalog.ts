@@ -112,7 +112,10 @@ export function resolveSessionCatalogAgentId(
   return selected && selected !== helloDefault ? null : helloDefault;
 }
 
-function requestSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
+function requestSessionCatalogRefresh(
+  owner: SessionCatalogDataOwner,
+  queueIfActive: boolean,
+): void {
   const snapshot = owner.context?.gateway.snapshot;
   owner.sessionCatalogLive.requestRefresh({
     visible: document.visibilityState !== "hidden",
@@ -121,16 +124,22 @@ function requestSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
       owner.sessionCatalogAgentId !== null &&
       Boolean(sessionCatalogListClient(snapshot, owner.sessionDataHostConnected)),
     generation: owner.sessionScopeGeneration,
+    queueIfActive,
     refresh: () => void owner.refreshSessionCatalogs(),
   });
 }
 
-export function scheduleSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
+export function scheduleSessionCatalogRefresh(
+  owner: SessionCatalogDataOwner,
+  queueIfActive = false,
+): void {
   if (document.visibilityState === "hidden") {
     owner.sessionCatalogLive.cancelScheduledRefreshes();
     return;
   }
-  owner.sessionCatalogLive.scheduleActivation(() => requestSessionCatalogRefresh(owner));
+  owner.sessionCatalogLive.scheduleActivation(queueIfActive, (shouldQueue) =>
+    requestSessionCatalogRefresh(owner, shouldQueue),
+  );
 }
 
 export function updateSessionCatalogData(owner: SessionCatalogDataOwner, defer = false): void {
@@ -156,7 +165,7 @@ export function applySessionCatalogPresence(
   payload: unknown,
 ): void {
   if (owner.sessionCatalogLive.observePresence(payload)) {
-    scheduleSessionCatalogRefresh(owner);
+    scheduleSessionCatalogRefresh(owner, true);
   }
 }
 

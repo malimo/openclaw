@@ -12,6 +12,104 @@ import {
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar session catalog pagination", () => {
+  it("does not queue a duplicate startup scan when focus returns during the first scan", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = deferred<SessionsCatalogListResult>();
+      const request = vi.fn().mockReturnValue(pending.promise);
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledOnce();
+
+      globalThis.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(50);
+      pending.resolve(catalogPage([]));
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      expect(request).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the scheduled freshness poll when a visible page receives focus", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn().mockResolvedValue(catalogPage([]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledOnce();
+
+      globalThis.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(50);
+      expect(request).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(29_950);
+      expect(request).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores browser presence churn when deciding whether native catalogs changed", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn().mockResolvedValue(catalogPage([]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledOnce();
+
+      gateway.publishEvent("presence", {
+        presence: [{ deviceId: "browser-1", mode: "webchat", reason: "connect" }],
+      });
+      gateway.publishEvent("presence", {
+        presence: [
+          { deviceId: "browser-1", mode: "webchat", reason: "connect" },
+          { deviceId: "browser-2", mode: "webchat", reason: "connect" },
+        ],
+      });
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(request).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("coalesces the visibility and focus events from one tab activation", async () => {
     vi.useFakeTimers();
     let visibility: DocumentVisibilityState = "visible";
