@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { Worker } from "node:worker_threads";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
 import {
@@ -121,7 +122,31 @@ describe("session touched-files worker runtime", () => {
       message: { role: "assistant", content: [] },
     });
     await loadSessionTouchedFilesInWorker(scope, `main\0worker-terminate-session\0${storePath}`);
-    await terminateSessionTouchedFilesWorkerForTest();
+    const terminateWorker = Worker.prototype.terminate;
+    let releaseTermination: () => void = () => {};
+    const terminationGate = new Promise<void>((resolve) => {
+      releaseTermination = resolve;
+    });
+    const terminateSpy = vi
+      .spyOn(Worker.prototype, "terminate")
+      .mockImplementation(function (this: Worker) {
+        return terminationGate.then(() => terminateWorker.call(this));
+      });
+    try {
+      const termination = terminateSessionTouchedFilesWorkerForTest();
+      let closeCompleted = false;
+      const close = closeSessionTouchedFilesWorker().then(() => {
+        closeCompleted = true;
+      });
+      await Promise.resolve();
+      expect(closeCompleted).toBe(false);
+
+      releaseTermination();
+      await Promise.all([termination, close]);
+    } finally {
+      releaseTermination();
+      terminateSpy.mockRestore();
+    }
     closeOpenClawAgentDatabasesForTest();
 
     expect(() => assertNoOpenClawAgentDatabaseLeases("main", { env })).not.toThrow();
