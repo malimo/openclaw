@@ -18,8 +18,8 @@ import {
 
 const temporaryDirectories: string[] = [];
 
-afterEach(() => {
-  closeSessionTouchedFilesWorker();
+afterEach(async () => {
+  await closeSessionTouchedFilesWorker();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   for (const directory of temporaryDirectories.splice(0)) {
@@ -65,5 +65,35 @@ describe("session touched-files worker runtime", () => {
     await expect(loadSessionTouchedFilesInWorker(scope, cacheKey)).resolves.toEqual([
       { path: "src/file.ts", kind: "modified" },
     ]);
+  });
+
+  it("releases worker-held agent database leases before closing", async () => {
+    const directory = fs.mkdtempSync(
+      path.join(fs.realpathSync(os.tmpdir()), "openclaw-touched-worker-close-"),
+    );
+    temporaryDirectories.push(directory);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: directory };
+    openOpenClawStateDatabase({ env });
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+    const scope = {
+      agentId: "main",
+      env,
+      sessionId: "worker-close-session",
+      sessionKey: "agent:main:worker-close-session",
+    };
+
+    await appendTranscriptMessage(scope, {
+      message: { role: "assistant", content: [] },
+    });
+    await loadSessionTouchedFilesInWorker(scope, `main\0worker-close-session\0${storePath}`);
+    await closeSessionTouchedFilesWorker();
+
+    expect(
+      openOpenClawStateDatabase({ env })
+        .db.prepare(
+          "SELECT COUNT(*) AS count FROM agent_database_leases WHERE agent_id = ? AND path = ?",
+        )
+        .get("main", storePath),
+    ).toEqual({ count: 1 });
   });
 });

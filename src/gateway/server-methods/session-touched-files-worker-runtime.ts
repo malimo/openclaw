@@ -8,6 +8,7 @@ import type {
 } from "./session-touched-files.worker.js";
 
 const REQUEST_TIMEOUT_MS = 120_000;
+const SHUTDOWN_TIMEOUT_MS = 5_000;
 
 type PendingRequest = {
   timeout: NodeJS.Timeout;
@@ -16,6 +17,7 @@ type PendingRequest = {
 };
 
 let worker: Worker | undefined;
+let closing: Promise<void> | undefined;
 let nextRequestId = 1;
 const pending = new Map<number, PendingRequest>();
 
@@ -33,7 +35,7 @@ function resolveSourceWorkerExecArgv(): string[] {
   return ["--import", `data:text/javascript,${encodeURIComponent(registerTsx)}`];
 }
 
-function stopWorker(error: Error): void {
+async function stopWorker(error: Error): Promise<void> {
   const active = worker;
   worker = undefined;
   active?.removeAllListeners();
@@ -43,7 +45,7 @@ function stopWorker(error: Error): void {
   }
   pending.clear();
   if (active) {
-    void active.terminate();
+    await active.terminate();
   }
 }
 
@@ -58,6 +60,9 @@ function ensureWorker(): Worker {
   );
   active.unref();
   active.on("message", (message: SessionTouchedFilesWorkerResult) => {
+    if (message.type === "stopped") {
+      return;
+    }
     const request = pending.get(message.requestId);
     if (!request) {
       return;
@@ -71,21 +76,22 @@ function ensureWorker(): Worker {
     }
   });
   active.once("error", (error) => {
-    stopWorker(error instanceof Error ? error : new Error(String(error)));
+    void stopWorker(error instanceof Error ? error : new Error(String(error)));
   });
   active.once("exit", (code) => {
     if (worker === active) {
-      stopWorker(new Error(`session touched-files worker exited with code ${code}`));
+      void stopWorker(new Error(`session touched-files worker exited with code ${code}`));
     }
   });
   worker = active;
   return active;
 }
 
-export function loadSessionTouchedFilesInWorker(
+export async function loadSessionTouchedFilesInWorker(
   scope: SessionTranscriptReadScope,
   cacheKey: string,
 ): Promise<SessionTouchedFile[]> {
+  await closing;
   return new Promise((resolve, reject) => {
     const requestId = nextRequestId++;
     const active = ensureWorker();
@@ -93,17 +99,53 @@ export function loadSessionTouchedFilesInWorker(
       if (!pending.has(requestId)) {
         return;
       }
-      stopWorker(new Error("session touched-files worker timed out"));
+      void stopWorker(new Error("session touched-files worker timed out"));
     }, REQUEST_TIMEOUT_MS);
     timeout.unref();
     pending.set(requestId, { timeout, resolve, reject });
-    const request: SessionTouchedFilesWorkerRequest = { requestId, scope, cacheKey };
+    const request: SessionTouchedFilesWorkerRequest = {
+      type: "load",
+      requestId,
+      scope,
+      cacheKey,
+    };
     active.postMessage(request, []);
   });
 }
 
-export function closeSessionTouchedFilesWorker(): void {
-  if (worker) {
-    stopWorker(new Error("session touched-files worker closed"));
+export async function closeSessionTouchedFilesWorker(): Promise<void> {
+  if (closing) {
+    return await closing;
   }
+  const active = worker;
+  if (!active) {
+    return;
+  }
+  closing = new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = async () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      active.removeListener("message", onMessage);
+      if (worker === active) {
+        await stopWorker(new Error("session touched-files worker closed"));
+      }
+      resolve();
+    };
+    const onMessage = (message: SessionTouchedFilesWorkerResult) => {
+      if (message.type === "stopped") {
+        void finish();
+      }
+    };
+    const timeout = setTimeout(() => void finish(), SHUTDOWN_TIMEOUT_MS);
+    timeout.unref();
+    active.on("message", onMessage);
+    active.postMessage({ type: "shutdown" }, []);
+  }).finally(() => {
+    closing = undefined;
+  });
+  return await closing;
 }
