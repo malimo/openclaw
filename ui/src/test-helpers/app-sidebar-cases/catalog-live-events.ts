@@ -355,4 +355,33 @@ describe("AppSidebar session catalog pagination", () => {
       vi.useRealTimers();
     }
   });
+
+  it("refreshes catalogs for compatible native presence without a mode", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn().mockResolvedValue(catalogPage([]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      gateway.publishEvent("presence", {
+        presence: [{ deviceId: "node-1", reason: "connect" }],
+      });
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(request).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

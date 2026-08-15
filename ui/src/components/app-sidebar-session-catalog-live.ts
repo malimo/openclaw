@@ -313,7 +313,7 @@ export class SessionCatalogLiveState {
       // Catalog hosts are native node connections. Browser/operator presence changes on
       // every tab connect, disconnect, and watched-session update, but cannot change the
       // native host inventory and must not trigger another full catalog scan.
-      if (!id || mode !== "node") {
+      if (!id || (mode && mode !== "node")) {
         continue;
       }
       const reason = typeof record.reason === "string" ? record.reason.trim().toLowerCase() : "";
