@@ -285,6 +285,26 @@ describe("authenticated profile avatar cache", () => {
     expect(fetchAvatar).toHaveBeenCalledTimes(2);
   });
 
+  it("retries a revisioned avatar immediately after a missing response", async () => {
+    setAvatarGatewayOrigin("https://gateway.example.test", "Bearer profile-token");
+    const fetchAvatar = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(null, { status: 404 }))
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 2, 3]), {
+          headers: { "content-type": "image/png" },
+        }),
+      );
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:profile-uploaded");
+
+    await expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=7")).resolves.toBeNull();
+    await expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=7")).resolves.toBe(
+      "blob:profile-uploaded",
+    );
+
+    expect(fetchAvatar).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps active avatar requests valid when a roster exceeds the cache limit", async () => {
     setAvatarGatewayOrigin("https://gateway.example.test", "Bearer profile-token");
     const finishRequests: Array<(response: Response) => void> = [];

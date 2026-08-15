@@ -136,6 +136,7 @@ function toTrustedAvatarUrl(value: string, gatewayOrigin: string | null): string
 
 function loadIdentityAvatar(url: string): string | Promise<string | null> {
   const cacheKey = url;
+  const cacheNotFound = !new URL(url, ORIGIN_PROBE).searchParams.has("v");
   const cached = identityAvatarCache.get(cacheKey);
   if (cached) {
     if (cached.retryAtMs !== null && Date.now() >= cached.retryAtMs) {
@@ -166,7 +167,7 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> {
         signal: AbortSignal.timeout(IDENTITY_AVATAR_FETCH_TIMEOUT_MS),
       });
       if (!response.ok) {
-        if (response.status === 404) {
+        if (response.status === 404 && cacheNotFound) {
           entry.retryAtMs = Date.now() + IDENTITY_AVATAR_MISS_CACHE_MS;
         }
         return null;
