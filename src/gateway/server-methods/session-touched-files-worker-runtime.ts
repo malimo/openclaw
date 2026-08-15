@@ -28,6 +28,7 @@ let acceptingRequests = true;
 let gatewayOwners = 0;
 let activeAdmissions = 0;
 let resolveAdmissionsDrained: (() => void) | undefined;
+let admissionGeneration = 0;
 let nextRequestId = 1;
 const pending = new Map<number, PendingRequest>();
 
@@ -155,7 +156,7 @@ function ensureWorker(): Worker {
   return active;
 }
 
-async function reserveWorkerAdmission(): Promise<() => void> {
+async function reserveWorkerAdmission(): Promise<{ generation: number; release: () => void }> {
   while (true) {
     if (!acceptingRequests) {
       throw new Error("session touched-files worker is shutting down");
@@ -166,8 +167,9 @@ async function reserveWorkerAdmission(): Promise<() => void> {
       continue;
     }
     activeAdmissions += 1;
+    const generation = admissionGeneration;
     let released = false;
-    return () => {
+    const release = () => {
       if (released) {
         return;
       }
@@ -178,6 +180,7 @@ async function reserveWorkerAdmission(): Promise<() => void> {
         resolveAdmissionsDrained = undefined;
       }
     };
+    return { generation, release };
   }
 }
 
@@ -194,10 +197,10 @@ export async function loadSessionTouchedFilesInWorker(
   scope: SessionTranscriptReadScope,
   cacheKey: string,
 ): Promise<SessionTouchedFile[]> {
-  const releaseAdmission = await reserveWorkerAdmission();
+  const admission = await reserveWorkerAdmission();
   try {
     await awaitStoppingWorker(false);
-    if (!acceptingRequests) {
+    if (!acceptingRequests || admission.generation !== admissionGeneration) {
       throw new Error("session touched-files worker is shutting down");
     }
     return new Promise((resolve, reject) => {
@@ -222,7 +225,7 @@ export async function loadSessionTouchedFilesInWorker(
       active.postMessage(request, []);
     });
   } finally {
-    releaseAdmission();
+    admission.release();
   }
 }
 
@@ -231,59 +234,68 @@ export async function closeSessionTouchedFilesWorker(): Promise<void> {
     return await closing;
   }
   closing = (async () => {
-    if (stopping) {
-      await awaitStoppingWorker(true);
-    }
-    const admissionsDrained = waitForWorkerAdmissions();
-    if (admissionsDrained) {
-      await admissionsDrained;
-    }
-    const active = worker;
-    if (!active) {
-      return;
-    }
-    await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const finish = async () => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timeout);
-        active.removeListener("message", onMessage);
-        if (notifyForcedStop === onForcedStop) {
-          notifyForcedStop = undefined;
-        }
-        if (worker === active) {
-          const cleanupError = await stopWorkerNow(
-            new Error("session touched-files worker closed"),
-          );
-          if (cleanupError) {
-            reject(cleanupError);
+    const timeout = setTimeout(() => {
+      admissionGeneration += 1;
+      void stopWorker(new Error("session touched-files worker shutdown timed out")).catch(() => {});
+    }, SHUTDOWN_TIMEOUT_MS);
+    timeout.unref();
+    try {
+      if (stopping) {
+        await awaitStoppingWorker(true);
+      }
+      const admissionsDrained = waitForWorkerAdmissions();
+      if (admissionsDrained) {
+        await admissionsDrained;
+      }
+      if (stopping) {
+        await awaitStoppingWorker(true);
+      }
+      const active = worker;
+      if (!active) {
+        return;
+      }
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const finish = async () => {
+          if (settled) {
             return;
           }
-        } else {
-          try {
-            await awaitStoppingWorker(true);
-          } catch (error) {
-            reject(error instanceof Error ? error : new Error(String(error)));
-            return;
+          settled = true;
+          active.removeListener("message", onMessage);
+          if (notifyForcedStop === onForcedStop) {
+            notifyForcedStop = undefined;
           }
-        }
-        resolve();
-      };
-      const onMessage = (message: SessionTouchedFilesWorkerResult) => {
-        if (message.type === "stopped") {
-          void finish();
-        }
-      };
-      const onForcedStop = () => void finish();
-      const timeout = setTimeout(() => void finish(), SHUTDOWN_TIMEOUT_MS);
-      timeout.unref();
-      notifyForcedStop = onForcedStop;
-      active.on("message", onMessage);
-      active.postMessage({ type: "shutdown" }, []);
-    });
+          if (worker === active) {
+            const cleanupError = await stopWorkerNow(
+              new Error("session touched-files worker closed"),
+            );
+            if (cleanupError) {
+              reject(cleanupError);
+              return;
+            }
+          } else {
+            try {
+              await awaitStoppingWorker(true);
+            } catch (error) {
+              reject(error instanceof Error ? error : new Error(String(error)));
+              return;
+            }
+          }
+          resolve();
+        };
+        const onMessage = (message: SessionTouchedFilesWorkerResult) => {
+          if (message.type === "stopped") {
+            void finish();
+          }
+        };
+        const onForcedStop = () => void finish();
+        notifyForcedStop = onForcedStop;
+        active.on("message", onMessage);
+        active.postMessage({ type: "shutdown" }, []);
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
   })().finally(() => {
     closing = undefined;
   });

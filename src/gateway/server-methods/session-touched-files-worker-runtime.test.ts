@@ -141,6 +141,42 @@ describe("session touched-files worker runtime", () => {
     expect(closeCompleted).toBe(true);
   });
 
+  it("bounds shutdown while an admitted worker load is stalled", async () => {
+    vi.useFakeTimers();
+    const postMessageSpy = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(() => {});
+    try {
+      const directory = fs.mkdtempSync(
+        path.join(fs.realpathSync(os.tmpdir()), "openclaw-touched-worker-stalled-"),
+      );
+      temporaryDirectories.push(directory);
+      const env = { ...process.env, OPENCLAW_STATE_DIR: directory };
+      openOpenClawStateDatabase({ env });
+      const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+      const load = loadSessionTouchedFilesInWorker(
+        {
+          agentId: "main",
+          env,
+          sessionId: "stalled-worker-session",
+          sessionKey: "agent:main:stalled-worker-session",
+        },
+        `main\0stalled-worker-session\0${storePath}`,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(postMessageSpy).toHaveBeenCalledWith(expect.objectContaining({ type: "load" }), []);
+
+      const close = closeSessionTouchedFilesWorker();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(load).rejects.toThrow("session touched-files worker shutdown timed out");
+      await expect(close).resolves.toBeUndefined();
+    } finally {
+      postMessageSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("retires only worker-owned leases after forced termination", async () => {
     const directory = fs.mkdtempSync(
       path.join(fs.realpathSync(os.tmpdir()), "openclaw-touched-worker-terminate-"),
