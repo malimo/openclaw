@@ -76,6 +76,8 @@ const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 const MAX_BROWSER_ENTRIES = 250;
 const MAX_SEARCH_ENTRIES = 500;
 const MAX_SEARCH_VISITED_ENTRIES = 5_000;
+// Cache only successful probes: removed Git metadata can remain visible for at most five
+// seconds, while the entry cap bounds that stale-positive state to 128 workspaces.
 const GIT_CHECKOUT_STATUS_CACHE_MAX_ENTRIES = 128;
 const GIT_CHECKOUT_STATUS_CACHE_TTL_MS = 5_000;
 type GitCheckoutStatusCacheEntry = { expiresAtMs: number; value: true };
