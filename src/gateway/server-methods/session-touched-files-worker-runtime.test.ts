@@ -14,6 +14,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import {
+  acquireSessionTouchedFilesWorkerAdmissionFence,
   acquireSessionTouchedFilesWorkerForGateway,
   closeSessionTouchedFilesWorker,
   loadSessionTouchedFilesInWorker,
@@ -125,20 +126,44 @@ describe("session touched-files worker runtime", () => {
       message: { role: "assistant", content: [] },
     });
 
-    const load = loadSessionTouchedFilesInWorker(
-      scope,
-      `main\0worker-admission-session\0${storePath}`,
-    );
-    let closeCompleted = false;
-    const close = closeSessionTouchedFilesWorker().then(() => {
-      closeCompleted = true;
+    const postMessageSpy = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+      this: Worker,
+      message: unknown,
+    ) {
+      if (!message || typeof message !== "object" || !("type" in message)) {
+        return;
+      }
+      if (message.type === "load" && "requestId" in message) {
+        const requestId = message.requestId;
+        if (typeof requestId === "number") {
+          queueMicrotask(() =>
+            this.emit("message", { type: "result", requestId, status: "ok", files: [] }),
+          );
+        }
+        return;
+      }
+      if (message.type === "shutdown") {
+        queueMicrotask(() => this.emit("message", { type: "stopped" }));
+      }
     });
-    await Promise.resolve();
-    expect(closeCompleted).toBe(false);
+    try {
+      const load = loadSessionTouchedFilesInWorker(
+        scope,
+        `main\0worker-admission-session\0${storePath}`,
+      );
+      let closeCompleted = false;
+      const close = closeSessionTouchedFilesWorker().then(() => {
+        closeCompleted = true;
+      });
+      await Promise.resolve();
+      expect(closeCompleted).toBe(false);
 
-    await expect(load).resolves.toEqual([]);
-    await close;
-    expect(closeCompleted).toBe(true);
+      await expect(load).resolves.toEqual([]);
+      await close;
+      expect(closeCompleted).toBe(true);
+    } finally {
+      postMessageSpy.mockRestore();
+    }
   });
 
   it("bounds shutdown while an admitted worker load is stalled", async () => {
@@ -175,6 +200,44 @@ describe("session touched-files worker runtime", () => {
       postMessageSpy.mockRestore();
       vi.useRealTimers();
     }
+  });
+
+  it("rejects new loads while an agent database mutation holds an admission fence", async () => {
+    const releaseFence = await acquireSessionTouchedFilesWorkerAdmissionFence();
+    try {
+      await expect(
+        loadSessionTouchedFilesInWorker(
+          {
+            agentId: "main",
+            sessionId: "fenced-worker-session",
+            sessionKey: "agent:main:fenced-worker-session",
+          },
+          "main\0fenced-worker-session\0fenced-worker-store",
+        ),
+      ).rejects.toThrow("session touched-files worker is shutting down");
+    } finally {
+      releaseFence();
+    }
+
+    const directory = fs.mkdtempSync(
+      path.join(fs.realpathSync(os.tmpdir()), "openclaw-touched-worker-fence-release-"),
+    );
+    temporaryDirectories.push(directory);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: directory };
+    openOpenClawStateDatabase({ env });
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+    const scope = {
+      agentId: "main",
+      env,
+      sessionId: "released-worker-session",
+      sessionKey: "agent:main:released-worker-session",
+    };
+    await appendTranscriptMessage(scope, {
+      message: { role: "assistant", content: [] },
+    });
+    await expect(
+      loadSessionTouchedFilesInWorker(scope, `main\0released-worker-session\0${storePath}`),
+    ).resolves.toEqual([]);
   });
 
   it("retires only worker-owned leases after forced termination", async () => {

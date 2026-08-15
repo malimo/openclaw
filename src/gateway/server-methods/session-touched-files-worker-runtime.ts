@@ -26,6 +26,7 @@ let stopping: Promise<Error | undefined> | undefined;
 let notifyForcedStop: (() => void) | undefined;
 let acceptingRequests = true;
 let gatewayOwners = 0;
+let admissionFences = 0;
 let activeAdmissions = 0;
 let resolveAdmissionsDrained: (() => void) | undefined;
 let admissionGeneration = 0;
@@ -158,7 +159,7 @@ function ensureWorker(): Worker {
 
 async function reserveWorkerAdmission(): Promise<{ generation: number; release: () => void }> {
   while (true) {
-    if (!acceptingRequests) {
+    if (!acceptingRequests || admissionFences > 0) {
       throw new Error("session touched-files worker is shutting down");
     }
     const activeClose = closing;
@@ -300,6 +301,26 @@ export async function closeSessionTouchedFilesWorker(): Promise<void> {
     closing = undefined;
   });
   return await closing;
+}
+
+/** Prevent new worker loads while a caller mutates agent-owned database paths. */
+export async function acquireSessionTouchedFilesWorkerAdmissionFence(): Promise<() => void> {
+  admissionFences += 1;
+  let released = false;
+  const release = () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    admissionFences = Math.max(0, admissionFences - 1);
+  };
+  try {
+    await closeSessionTouchedFilesWorker();
+    return release;
+  } catch (error) {
+    release();
+    throw error;
+  }
 }
 
 /** Own worker admission for exactly one Gateway lifecycle. */

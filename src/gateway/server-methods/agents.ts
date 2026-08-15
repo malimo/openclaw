@@ -110,7 +110,7 @@ import {
   updateAgentConfigEntry,
 } from "./agents-config-mutations.js";
 import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
-import { closeSessionTouchedFilesWorker } from "./session-touched-files-worker-runtime.js";
+import { acquireSessionTouchedFilesWorkerAdmissionFence } from "./session-touched-files-worker-runtime.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 // Derived from the canonical workspace list so retiring a bootstrap file cannot
@@ -1147,9 +1147,10 @@ export const agentsHandlers: GatewayRequestHandlers = {
         let rosterCommitted = !configured;
         let committed: Awaited<ReturnType<typeof deleteAgentConfigEntry>> | undefined;
         let databasePlan: AgentDeleteDatabasePlan | undefined;
+        let releaseSessionWorkerFence: (() => void) | undefined;
         try {
           prepareJournaledAgentDirOwnership(lockedConfig, agentId, journal.agentDir);
-          await closeSessionTouchedFilesWorker();
+          releaseSessionWorkerFence = await acquireSessionTouchedFilesWorkerAdmissionFence();
           databasePlan = prepareAgentDeleteDatabases(lockedConfig, agentId, journal.agentDir);
           deletion.fenceDatabasePaths([
             ...journal.databasePaths,
@@ -1273,6 +1274,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
             deletion.rollback();
           }
           throw error;
+        } finally {
+          releaseSessionWorkerFence?.();
         }
 
         const deleteResult = committed?.result ?? {
