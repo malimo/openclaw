@@ -4,6 +4,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 
 export type PreparedGatewaySessionLifecycle = {
   spawnedCwd?: string;
+  sessionRoot?: string;
   worktree?: NonNullable<SessionEntry["worktree"]>;
   rollback?: () => Promise<void>;
 };
