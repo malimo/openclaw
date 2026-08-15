@@ -58,15 +58,46 @@ it("keeps a pending route when its release races with a cached miss", async () =
   const first = new AuthenticatedAvatarRouteLoader(vi.fn(), { cacheNotFound: true });
   expect(first.resolve("/avatar/release-race", ["token"])).toBeNull();
   first.reset();
+  await vi.advanceTimersByTimeAsync(0);
   finishRequest?.({ ok: false, status: 404 } as Response);
   await Promise.resolve();
   await Promise.resolve();
-  await vi.advanceTimersByTimeAsync(0);
 
   const second = new AuthenticatedAvatarRouteLoader(vi.fn(), { cacheNotFound: true });
   expect(second.resolve("/avatar/release-race", ["token"])).toBeNull();
   expect(fetchMock).toHaveBeenCalledOnce();
   second.reset();
+});
+
+it("bounds released missing routes while preserving the newest cooldown", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+  const fetchMock = vi.fn(async () => ({ ok: false, status: 404 }) as Response);
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  const loaders = Array.from(
+    { length: 129 },
+    () => new AuthenticatedAvatarRouteLoader(vi.fn(), { cacheNotFound: true }),
+  );
+
+  for (const [index, loader] of loaders.entries()) {
+    expect(loader.resolve(`/avatar/cache-${String(index)}`, ["token"])).toBeNull();
+  }
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(129));
+  await Promise.resolve();
+  await Promise.resolve();
+  for (const loader of loaders) {
+    loader.reset();
+  }
+
+  const retryOldest = new AuthenticatedAvatarRouteLoader(vi.fn(), { cacheNotFound: true });
+  expect(retryOldest.resolve("/avatar/cache-0", ["token"])).toBeNull();
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(130));
+
+  const reuseNewest = new AuthenticatedAvatarRouteLoader(vi.fn(), { cacheNotFound: true });
+  expect(reuseNewest.resolve("/avatar/cache-128", ["token"])).toBeNull();
+  expect(fetchMock).toHaveBeenCalledTimes(130);
+  retryOldest.reset();
+  reuseNewest.reset();
 });
 
 it("shares pending fetches and revokes the resolved blob on reset", async () => {

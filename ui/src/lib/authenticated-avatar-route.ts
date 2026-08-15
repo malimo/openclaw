@@ -1,15 +1,60 @@
 type AvatarRouteEntry = {
   blobUrl: string | null;
+  cacheNotFound: boolean;
   consumers: Map<symbol, () => void>;
   controller: AbortController;
   notFoundUntilMs: number | undefined;
+  pending: boolean;
   releaseTimer: ReturnType<typeof setTimeout> | undefined;
 };
 
 /** Bound protected avatar fetches so a stalled Gateway route cannot pin UI state forever. */
 const AUTHENTICATED_AVATAR_FETCH_TIMEOUT_MS = 30_000;
 const AUTHENTICATED_AVATAR_NOT_FOUND_CACHE_MS = 30_000;
+const AUTHENTICATED_AVATAR_NOT_FOUND_CACHE_MAX_ENTRIES = 128;
 const sharedAvatarRoutes = new Map<string, AvatarRouteEntry>();
+
+function deleteAvatarRouteEntry(key: string, entry: AvatarRouteEntry) {
+  if (sharedAvatarRoutes.get(key) !== entry) {
+    return;
+  }
+  sharedAvatarRoutes.delete(key);
+  if (entry.releaseTimer !== undefined) {
+    clearTimeout(entry.releaseTimer);
+    entry.releaseTimer = undefined;
+  }
+  entry.controller.abort();
+  if (entry.blobUrl) {
+    URL.revokeObjectURL(entry.blobUrl);
+  }
+}
+
+function trimSettledNotFoundEntries(protectedEntry: AvatarRouteEntry) {
+  let retainedMisses = 0;
+  for (const entry of sharedAvatarRoutes.values()) {
+    if (!entry.pending && entry.consumers.size === 0 && entry.notFoundUntilMs !== undefined) {
+      retainedMisses += 1;
+    }
+  }
+  let excess = retainedMisses - AUTHENTICATED_AVATAR_NOT_FOUND_CACHE_MAX_ENTRIES;
+  if (excess <= 0) {
+    return;
+  }
+  for (const [key, entry] of sharedAvatarRoutes) {
+    if (
+      entry !== protectedEntry &&
+      !entry.pending &&
+      entry.consumers.size === 0 &&
+      entry.notFoundUntilMs !== undefined
+    ) {
+      deleteAvatarRouteEntry(key, entry);
+      excess -= 1;
+      if (excess === 0) {
+        return;
+      }
+    }
+  }
+}
 
 function avatarRouteKey(
   url: string,
@@ -25,7 +70,11 @@ function releaseEntry(key: string, owner: symbol) {
     return;
   }
   entry.consumers.delete(owner);
-  if (entry.consumers.size > 0 || entry.releaseTimer !== undefined) {
+  if (
+    entry.consumers.size > 0 ||
+    (entry.pending && entry.cacheNotFound) ||
+    entry.releaseTimer !== undefined
+  ) {
     return;
   }
   scheduleEntryRelease(key, entry);
@@ -39,19 +88,20 @@ function scheduleEntryRelease(key: string, entry: AvatarRouteEntry) {
     : 0;
   entry.releaseTimer = setTimeout(() => {
     entry.releaseTimer = undefined;
-    if (sharedAvatarRoutes.get(key) !== entry || entry.consumers.size > 0) {
+    if (
+      sharedAvatarRoutes.get(key) !== entry ||
+      entry.consumers.size > 0 ||
+      (entry.pending && entry.cacheNotFound)
+    ) {
       return;
     }
     if (entry.notFoundUntilMs && Date.now() < entry.notFoundUntilMs) {
       scheduleEntryRelease(key, entry);
       return;
     }
-    sharedAvatarRoutes.delete(key);
-    entry.controller.abort();
-    if (entry.blobUrl) {
-      URL.revokeObjectURL(entry.blobUrl);
-    }
+    deleteAvatarRouteEntry(key, entry);
   }, releaseDelayMs);
+  trimSettledNotFoundEntries(entry);
 }
 
 async function fetchAvatarRoute(
@@ -88,6 +138,7 @@ async function fetchAvatarRoute(
     clearTimeout(timeout);
   }
 
+  entry.pending = false;
   if (sharedAvatarRoutes.get(key) !== entry) {
     if (blobUrl) {
       URL.revokeObjectURL(blobUrl);
@@ -97,6 +148,9 @@ async function fetchAvatarRoute(
   if (!blobUrl) {
     if (notFound && cacheNotFound) {
       entry.notFoundUntilMs = Date.now() + AUTHENTICATED_AVATAR_NOT_FOUND_CACHE_MS;
+      if (entry.consumers.size === 0) {
+        scheduleEntryRelease(key, entry);
+      }
       return;
     }
     // Avatar misses stay retryable because a later identity publication may make the route valid.
@@ -106,6 +160,9 @@ async function fetchAvatarRoute(
   entry.blobUrl = blobUrl;
   for (const update of entry.consumers.values()) {
     update();
+  }
+  if (entry.consumers.size === 0) {
+    scheduleEntryRelease(key, entry);
   }
 }
 
@@ -152,16 +209,17 @@ export class AuthenticatedAvatarRouteLoader {
     const key = avatarRouteKey(url, authTokens, cacheNotFound);
     let entry = sharedAvatarRoutes.get(key);
     if (entry?.notFoundUntilMs && Date.now() >= entry.notFoundUntilMs) {
-      sharedAvatarRoutes.delete(key);
-      entry.controller.abort();
+      deleteAvatarRouteEntry(key, entry);
       entry = undefined;
     }
     if (!entry) {
       entry = {
         blobUrl: null,
+        cacheNotFound,
         consumers: new Map(),
         controller: new AbortController(),
         notFoundUntilMs: undefined,
+        pending: true,
         releaseTimer: undefined,
       };
       sharedAvatarRoutes.set(key, entry);
