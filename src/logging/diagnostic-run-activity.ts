@@ -40,6 +40,7 @@ import {
   ownerRefsForRecovery,
   ownerRefsForStartedEvent,
   pruneActivityStartedBeforeRecoveryCutoff,
+  recordDiagnosticToolProgress,
   rememberRecoveredOwnerStartEventCutoffs,
   shouldIgnoreRecoveredOwnerStartEvent,
 } from "./diagnostic-run-activity-recovery.js";
@@ -47,7 +48,6 @@ import {
   buildDiagnosticSessionActivitySnapshot,
   type DiagnosticSessionActivitySnapshot,
 } from "./diagnostic-run-activity-snapshot.js";
-
 export type { DiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity-snapshot.js";
 export type { DiagnosticEmbeddedRunOwner } from "../infra/diagnostic-model-request-provenance.js";
 
@@ -79,7 +79,7 @@ type ModelStartedActivityEvent = Pick<
 
 type RunProgressEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "run.progress" }>,
-  "runId" | "sessionId" | "sessionKey" | "reason"
+  "runId" | "sessionId" | "sessionKey" | "toolCallId" | "reason"
 > & { progressKind?: "semantic" | "liveness" };
 
 // Quiet-but-alive tools are normal agent behavior; the CLI byte watchdog kills
@@ -265,10 +265,10 @@ function toolKey(event: {
   sessionId?: string;
   sessionKey?: string;
   toolCallId?: string;
-  toolName: string;
+  toolName?: string;
 }): string {
   return `${event.runId ?? event.sessionId ?? event.sessionKey ?? "unknown"}:${
-    event.toolCallId ?? event.toolName
+    event.toolCallId ?? event.toolName ?? "unknown"
   }`;
 }
 
@@ -291,6 +291,7 @@ function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
     toolCallId: event.toolCallId,
     startedAt: now,
     lastProgressAt: now,
+    lastProgressReason: `tool:${event.toolName}:started`,
   });
   touchSessionActivity(activity, `tool:${event.toolName}:started`, now);
 }
@@ -402,10 +403,6 @@ function recordModelEnded(
   touchSessionActivity(activity, "model_call:ended");
 }
 
-function recordRunProgress(event: RunProgressEvent, coreSemantic: boolean): void {
-  applyRunProgress(event, coreSemantic);
-}
-
 export function markDiagnosticArgumentChurnObservation(
   params: DiagnosticArgumentChurnObservationParams,
 ): void {
@@ -423,12 +420,15 @@ function applyRunProgress(params: RunProgressEvent, semantic = false): void {
   if (!activity) {
     return;
   }
+  const now = Date.now();
+  const toolProgressKey = params.toolCallId ? toolKey({ ...params, runId }) : undefined;
+  recordDiagnosticToolProgress(activity.activeTools, toolProgressKey, params.reason, now);
   // Only an explicit fact from the current owner may clear its recovery evidence.
   if (!semantic || !runId) {
-    touchSessionActivity(activity, params.reason);
+    touchSessionActivity(activity, params.reason, now);
     return;
   }
-  touchSemanticSessionActivity(activity, params.reason, { runId });
+  touchSemanticSessionActivity(activity, params.reason, { runId, now });
 }
 
 function recordRunCompleted(
@@ -742,7 +742,7 @@ export function startDiagnosticRunActivityTracking(): void {
         recordModelEnded(event, resolveCoreModelRequestLifecycleDiagnosticMetadata(metadata));
         return;
       case "run.progress":
-        recordRunProgress(event, isCoreSemanticRunProgressDiagnosticMetadata(metadata));
+        applyRunProgress(event, isCoreSemanticRunProgressDiagnosticMetadata(metadata));
         return;
       case "run.completed":
         recordRunCompleted(event);

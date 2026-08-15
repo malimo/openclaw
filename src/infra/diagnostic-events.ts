@@ -379,6 +379,7 @@ export type DiagnosticRunProgressEvent = DiagnosticBaseEvent & {
   sessionKey?: string;
   sessionId?: string;
   runId?: string;
+  toolCallId?: string;
   reason: string;
 };
 

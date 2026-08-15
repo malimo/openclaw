@@ -56,7 +56,7 @@ export function createCodexAttemptTurnWatchController(params: {
   onCompleted: () => void;
   onRecordEvent: (name: string, fields: Record<string, unknown>) => void;
   onAttemptProgress: (reason: string, details?: Record<string, unknown>) => void;
-  onProgressDiagnostic: (reason: string) => void;
+  onProgressDiagnostic: (reason: string, toolCallId?: string) => void;
 }) {
   const timers: Partial<Record<WatchTimerKind, Timer>> = {};
   let completionIdleWatchArmed = false;
@@ -412,6 +412,7 @@ export function createCodexAttemptTurnWatchController(params: {
       options?: {
         arm?: boolean;
         details?: Record<string, unknown>;
+        toolCallId?: string;
         attemptProgress?: boolean;
         attemptTimeoutMs?: number;
       },
@@ -423,7 +424,7 @@ export function createCodexAttemptTurnWatchController(params: {
       if (options?.attemptProgress) {
         recordAttemptProgress(reason, options);
       }
-      params.onProgressDiagnostic(reason);
+      params.onProgressDiagnostic(reason, options?.toolCallId);
       if (options?.arm) {
         completionIdleWatchArmed = true;
         completionIdleWatchPinnedByTerminalError = false;

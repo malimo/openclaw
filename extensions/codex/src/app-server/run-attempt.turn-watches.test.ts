@@ -2485,6 +2485,40 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
   });
 
+  it("correlates native tool progress diagnostics with the app-server item", async () => {
+    const harness = createStartedThreadHarness();
+    const params = makeTestParams({ timeoutMs: 1_000 });
+    const progressEvents: DiagnosticEventPayload[] = [];
+    const stopDiagnostics = onInternalDiagnosticEvent((event) => {
+      if (
+        event.type === "run.progress" &&
+        event.reason === "codex_app_server:notification:item/commandExecution/outputDelta"
+      ) {
+        progressEvents.push(event);
+      }
+    });
+    try {
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      await harness.notify({
+        method: "item/commandExecution/outputDelta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "command-1",
+          delta: "still running",
+        },
+      });
+      await vi.waitFor(() => expect(progressEvents).toHaveLength(1), { interval: 1 });
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+    } finally {
+      stopDiagnostics();
+    }
+
+    expect(progressEvents[0]).toMatchObject({ toolCallId: "command-1" });
+  });
+
   it("does not idle-timeout when terminal completion queues behind projection", async () => {
     const harness = createStartedThreadHarness();
     const params = makeTestParams({ timeoutMs: 120 });

@@ -115,6 +115,7 @@ export function applyCodexTurnNotificationState(params: {
     updateActiveCompletionBlockerItemIds(notification, params.activeCompletionBlockerItemIds);
     turnWatches.touchActivity(`notification:${notification.method}`, {
       details: describeNotificationActivity(notification),
+      toolCallId: readNotificationItemId(notification),
       attemptProgress: true,
     });
     params.onReportExecutionNotification(notification);

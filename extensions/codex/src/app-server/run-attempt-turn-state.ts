@@ -204,12 +204,13 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
         backend: "codex-app-server",
       });
     },
-    onProgressDiagnostic: (reason) => {
+    onProgressDiagnostic: (reason, toolCallId) => {
       emitTrustedDiagnosticEvent({
         type: "run.progress",
         runId: params.runId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
+        ...(toolCallId ? { toolCallId } : {}),
         reason: `codex_app_server:${reason}`,
       });
     },

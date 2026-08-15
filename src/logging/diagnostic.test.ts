@@ -1002,6 +1002,113 @@ describe("stuck session diagnostics threshold", () => {
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "the older call stalls while the newer call progresses",
+      gapMs: 14 * 60_000,
+      progressCallId: "call-2",
+      progressTicks: 4,
+    },
+    {
+      name: "the newer call stalls while the older call progresses",
+      gapMs: 60_000,
+      progressCallId: "call-1",
+      progressTicks: 30,
+    },
+  ])(
+    "recovers an overlapping stale tool when $name",
+    ({ gapMs, progressCallId, progressTicks }) => {
+      const recoverStuckSession = vi.fn();
+
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        toolName: "bash",
+        toolCallId: "call-1",
+      });
+
+      vi.advanceTimersByTime(gapMs);
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        toolName: "collab.wait",
+        toolCallId: "call-2",
+      });
+      for (let i = 0; i < progressTicks; i += 1) {
+        vi.advanceTimersByTime(29_000);
+        markDiagnosticRunProgressForTest({
+          sessionId: "s1",
+          sessionKey: "main",
+          runId: "run-1",
+          toolCallId: progressCallId,
+          reason: "codex_app_server:notification:item/updated",
+        });
+        vi.advanceTimersByTime(1_000);
+      }
+
+      expectRecoveryCall(
+        recoverStuckSession,
+        { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
+        ["ageMs", "stateGeneration"],
+      );
+    },
+  );
+
+  it("keeps parallel tools alive when their progress is not tool-correlated", () => {
+    const recoverStuckSession = vi.fn();
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+        },
+      },
+      { recoverStuckSession },
+    );
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+    markDiagnosticToolStartedForTest({
+      sessionId: "s1",
+      sessionKey: "main",
+      runId: "run-1",
+      toolName: "bash",
+      toolCallId: "call-1",
+    });
+    vi.advanceTimersByTime(60_000);
+    markDiagnosticToolStartedForTest({
+      sessionId: "s1",
+      sessionKey: "main",
+      runId: "run-1",
+      toolName: "collab.wait",
+      toolCallId: "call-2",
+    });
+
+    for (let i = 0; i < 30; i += 1) {
+      vi.advanceTimersByTime(29_000);
+      markDiagnosticRunProgressForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        reason: "cli_live:stream_progress",
+      });
+      vi.advanceTimersByTime(1_000);
+    }
+
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
   it("recovers stale model calls through the active embedded-run abort path", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();

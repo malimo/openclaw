@@ -19,12 +19,34 @@ export type DiagnosticRecoveryTool = DiagnosticRecoveryMarker & {
   toolCallId?: string;
   startedAt: number;
   lastProgressAt: number;
+  lastProgressReason: string;
+  tracksCorrelatedProgress?: true;
 };
 
 export type DiagnosticRecoveryModelCall = DiagnosticRecoveryMarker & {
   sessionKey?: string;
   requestTimeoutMs?: number;
 };
+
+export function recordDiagnosticToolProgress(
+  tools: Map<string, DiagnosticRecoveryTool>,
+  key: string | undefined,
+  reason: string,
+  now: number,
+): void {
+  const tool = key ? tools.get(key) : tools.size === 1 ? tools.values().next().value : undefined;
+  if (tool) {
+    if (key) {
+      for (const activeTool of tools.values()) {
+        if (activeTool.runId === tool.runId) {
+          activeTool.tracksCorrelatedProgress = true;
+        }
+      }
+    }
+    tool.lastProgressAt = now;
+    tool.lastProgressReason = reason;
+  }
+}
 
 type DiagnosticRecoveryActivity = {
   activeEmbeddedRuns: Map<string, DiagnosticRecoveryEmbeddedRun>;
