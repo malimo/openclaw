@@ -130,9 +130,7 @@ describe("sessions.workspace.status RPC handler", () => {
     expect(hoisted.runGit).toHaveBeenCalledOnce();
   });
 
-  it("keeps cold checkout probes coalesced under cache pressure", async () => {
-    let activeProbes = 0;
-    let peakActiveProbes = 0;
+  it("does not queue a healthy workspace behind stalled probes", async () => {
     let releaseProbes: () => void = () => {};
     const probeGate = new Promise<void>((resolve) => {
       releaseProbes = resolve;
@@ -153,30 +151,31 @@ describe("sessions.workspace.status RPC handler", () => {
       };
     });
     const runPressureProbe = async (cwd: string) => {
-      activeProbes += 1;
-      peakActiveProbes = Math.max(peakActiveProbes, activeProbes);
+      if (cwd.endsWith("pressure-4")) {
+        return { code: 0, stderr: "", stdout: `${cwd}\n` };
+      }
       await probeGate;
-      activeProbes -= 1;
       return { code: 0, stderr: "", stdout: `${cwd}\n` };
     };
 
     await hoisted.runGit.withImplementation(runPressureProbe, async () => {
-      const coldRequests = Array.from({ length: 129 }, (_, index) =>
+      const stalledRequests = Array.from({ length: 4 }, (_, index) =>
         invokeSessionFilesHandler("sessions.workspace.status", {
           sessionKey: `agent:main:pressure-${String(index)}`,
         }),
       );
-      const duplicateFirstRequest = invokeSessionFilesHandler("sessions.workspace.status", {
-        sessionKey: "agent:main:pressure-0",
-      });
-
       await vi.waitFor(() => expect(hoisted.runGit).toHaveBeenCalledTimes(4));
-      releaseProbes();
-      const payloads = await Promise.all([...coldRequests, duplicateFirstRequest]);
 
-      expect(payloads).toHaveLength(130);
-      expect(hoisted.runGit).toHaveBeenCalledTimes(129);
-      expect(peakActiveProbes).toBe(4);
+      const healthyPayload = expectOkPayload(
+        await invokeSessionFilesHandler("sessions.workspace.status", {
+          sessionKey: "agent:main:pressure-4",
+        }),
+      );
+      expect(healthyPayload.gitCheckout).toBe(true);
+      expect(hoisted.runGit).toHaveBeenCalledTimes(5);
+
+      releaseProbes();
+      await Promise.all(stalledRequests);
     });
   });
 });

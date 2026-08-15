@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import pLimit from "p-limit";
 import {
   ErrorCodes,
   errorShape,
@@ -79,11 +78,9 @@ const MAX_SEARCH_ENTRIES = 500;
 const MAX_SEARCH_VISITED_ENTRIES = 5_000;
 const GIT_CHECKOUT_STATUS_CACHE_MAX_ENTRIES = 128;
 const GIT_CHECKOUT_STATUS_CACHE_TTL_MS = 5_000;
-const GIT_CHECKOUT_STATUS_PROBE_CONCURRENCY = 4;
 type GitCheckoutStatusCacheEntry = { expiresAtMs: number; value: true };
 const gitCheckoutStatusCache = new Map<string, GitCheckoutStatusCacheEntry>();
 const gitCheckoutStatusProbes = new Map<string, Promise<boolean>>();
-const limitGitCheckoutStatusProbe = pLimit(GIT_CHECKOUT_STATUS_PROBE_CONCURRENCY);
 // Matches file-type's documented default buffer sample while keeping metadata
 // classification independent from the 256 KiB inline-content cap.
 const MIME_SNIFF_PREFIX_BYTES = 4_100;
@@ -581,14 +578,14 @@ async function loadGitCheckoutStatus(diffCwd: string | undefined): Promise<boole
     return await activeProbe;
   }
 
-  const promise = limitGitCheckoutStatusProbe(async () => {
+  const promise = (async () => {
     try {
       const result = await runGit(cacheKey, ["rev-parse", "--show-toplevel"]);
       return result.code === 0 && Boolean(result.stdout.trim());
     } catch {
       return false;
     }
-  });
+  })();
   gitCheckoutStatusProbes.set(cacheKey, promise);
   try {
     const value = await promise;
