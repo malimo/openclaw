@@ -26,6 +26,8 @@ let stopping: Promise<Error | undefined> | undefined;
 let notifyForcedStop: (() => void) | undefined;
 let acceptingRequests = true;
 let gatewayOwners = 0;
+let activeAdmissions = 0;
+let resolveAdmissionsDrained: (() => void) | undefined;
 let nextRequestId = 1;
 const pending = new Map<number, PendingRequest>();
 
@@ -153,92 +155,136 @@ function ensureWorker(): Worker {
   return active;
 }
 
+async function reserveWorkerAdmission(): Promise<() => void> {
+  while (true) {
+    if (!acceptingRequests) {
+      throw new Error("session touched-files worker is shutting down");
+    }
+    const activeClose = closing;
+    if (activeClose) {
+      await activeClose;
+      continue;
+    }
+    activeAdmissions += 1;
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      activeAdmissions = Math.max(0, activeAdmissions - 1);
+      if (activeAdmissions === 0) {
+        resolveAdmissionsDrained?.();
+        resolveAdmissionsDrained = undefined;
+      }
+    };
+  }
+}
+
+function waitForWorkerAdmissions(): Promise<void> | undefined {
+  if (activeAdmissions === 0) {
+    return;
+  }
+  return new Promise<void>((resolve) => {
+    resolveAdmissionsDrained = resolve;
+  });
+}
+
 export async function loadSessionTouchedFilesInWorker(
   scope: SessionTranscriptReadScope,
   cacheKey: string,
 ): Promise<SessionTouchedFile[]> {
-  if (!acceptingRequests) {
-    throw new Error("session touched-files worker is shutting down");
+  const releaseAdmission = await reserveWorkerAdmission();
+  try {
+    await awaitStoppingWorker(false);
+    if (!acceptingRequests) {
+      throw new Error("session touched-files worker is shutting down");
+    }
+    return new Promise((resolve, reject) => {
+      const requestId = nextRequestId++;
+      const active = ensureWorker();
+      const stateDirectory = scope.env?.OPENCLAW_STATE_DIR ?? "";
+      workerLeaseEnvironments.set(stateDirectory, scope.env);
+      const timeout = setTimeout(() => {
+        if (!pending.has(requestId)) {
+          return;
+        }
+        void stopWorker(new Error("session touched-files worker timed out")).catch(() => {});
+      }, REQUEST_TIMEOUT_MS);
+      timeout.unref();
+      pending.set(requestId, { timeout, resolve, reject });
+      const request: SessionTouchedFilesWorkerRequest = {
+        type: "load",
+        requestId,
+        scope,
+        cacheKey,
+      };
+      active.postMessage(request, []);
+    });
+  } finally {
+    releaseAdmission();
   }
-  await closing;
-  await awaitStoppingWorker(false);
-  if (!acceptingRequests) {
-    throw new Error("session touched-files worker is shutting down");
-  }
-  return new Promise((resolve, reject) => {
-    const requestId = nextRequestId++;
-    const active = ensureWorker();
-    const stateDirectory = scope.env?.OPENCLAW_STATE_DIR ?? "";
-    workerLeaseEnvironments.set(stateDirectory, scope.env);
-    const timeout = setTimeout(() => {
-      if (!pending.has(requestId)) {
-        return;
-      }
-      void stopWorker(new Error("session touched-files worker timed out")).catch(() => {});
-    }, REQUEST_TIMEOUT_MS);
-    timeout.unref();
-    pending.set(requestId, { timeout, resolve, reject });
-    const request: SessionTouchedFilesWorkerRequest = {
-      type: "load",
-      requestId,
-      scope,
-      cacheKey,
-    };
-    active.postMessage(request, []);
-  });
 }
 
 export async function closeSessionTouchedFilesWorker(): Promise<void> {
-  if (stopping) {
-    await awaitStoppingWorker(true);
-  }
   if (closing) {
     return await closing;
   }
-  const active = worker;
-  if (!active) {
-    return;
-  }
-  closing = new Promise<void>((resolve, reject) => {
-    let settled = false;
-    const finish = async () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      active.removeListener("message", onMessage);
-      if (notifyForcedStop === onForcedStop) {
-        notifyForcedStop = undefined;
-      }
-      if (worker === active) {
-        const cleanupError = await stopWorkerNow(new Error("session touched-files worker closed"));
-        if (cleanupError) {
-          reject(cleanupError);
+  closing = (async () => {
+    if (stopping) {
+      await awaitStoppingWorker(true);
+    }
+    const admissionsDrained = waitForWorkerAdmissions();
+    if (admissionsDrained) {
+      await admissionsDrained;
+    }
+    const active = worker;
+    if (!active) {
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = async () => {
+        if (settled) {
           return;
         }
-      } else {
-        try {
-          await awaitStoppingWorker(true);
-        } catch (error) {
-          reject(error instanceof Error ? error : new Error(String(error)));
-          return;
+        settled = true;
+        clearTimeout(timeout);
+        active.removeListener("message", onMessage);
+        if (notifyForcedStop === onForcedStop) {
+          notifyForcedStop = undefined;
         }
-      }
-      resolve();
-    };
-    const onMessage = (message: SessionTouchedFilesWorkerResult) => {
-      if (message.type === "stopped") {
-        void finish();
-      }
-    };
-    const onForcedStop = () => void finish();
-    const timeout = setTimeout(() => void finish(), SHUTDOWN_TIMEOUT_MS);
-    timeout.unref();
-    notifyForcedStop = onForcedStop;
-    active.on("message", onMessage);
-    active.postMessage({ type: "shutdown" }, []);
-  }).finally(() => {
+        if (worker === active) {
+          const cleanupError = await stopWorkerNow(
+            new Error("session touched-files worker closed"),
+          );
+          if (cleanupError) {
+            reject(cleanupError);
+            return;
+          }
+        } else {
+          try {
+            await awaitStoppingWorker(true);
+          } catch (error) {
+            reject(error instanceof Error ? error : new Error(String(error)));
+            return;
+          }
+        }
+        resolve();
+      };
+      const onMessage = (message: SessionTouchedFilesWorkerResult) => {
+        if (message.type === "stopped") {
+          void finish();
+        }
+      };
+      const onForcedStop = () => void finish();
+      const timeout = setTimeout(() => void finish(), SHUTDOWN_TIMEOUT_MS);
+      timeout.unref();
+      notifyForcedStop = onForcedStop;
+      active.on("message", onMessage);
+      active.postMessage({ type: "shutdown" }, []);
+    });
+  })().finally(() => {
     closing = undefined;
   });
   return await closing;

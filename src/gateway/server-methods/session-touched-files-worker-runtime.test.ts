@@ -107,6 +107,40 @@ describe("session touched-files worker runtime", () => {
     ).toEqual({ count: 1 });
   });
 
+  it("waits for a load admitted before worker creation", async () => {
+    const directory = fs.mkdtempSync(
+      path.join(fs.realpathSync(os.tmpdir()), "openclaw-touched-worker-admission-"),
+    );
+    temporaryDirectories.push(directory);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: directory };
+    openOpenClawStateDatabase({ env });
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+    const scope = {
+      agentId: "main",
+      env,
+      sessionId: "worker-admission-session",
+      sessionKey: "agent:main:worker-admission-session",
+    };
+    await appendTranscriptMessage(scope, {
+      message: { role: "assistant", content: [] },
+    });
+
+    const load = loadSessionTouchedFilesInWorker(
+      scope,
+      `main\0worker-admission-session\0${storePath}`,
+    );
+    let closeCompleted = false;
+    const close = closeSessionTouchedFilesWorker().then(() => {
+      closeCompleted = true;
+    });
+    await Promise.resolve();
+    expect(closeCompleted).toBe(false);
+
+    await expect(load).resolves.toEqual([]);
+    await close;
+    expect(closeCompleted).toBe(true);
+  });
+
   it("retires only worker-owned leases after forced termination", async () => {
     const directory = fs.mkdtempSync(
       path.join(fs.realpathSync(os.tmpdir()), "openclaw-touched-worker-terminate-"),
