@@ -43,7 +43,6 @@ import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { chatHandlers } from "./chat.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { captureCreatedSessionDiffBaseline } from "./session-create-diff-baseline.js";
 import {
   resolveSessionCreateInitialTurn,
   shouldAttachPendingMessageSeq,
@@ -581,19 +580,17 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       commandSource: "webchat",
       creation: sessionCreation,
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
+      armSessionDiffBaselineCapture: true,
       loadGatewayModelCatalog: () =>
         context.loadGatewayModelCatalog({ agentId: modelCatalogAgentId }),
       ...(commitGuard ? { commitGuard } : {}),
       afterCreate: async ({ key, agentId, entry, storePath }) => {
-        // Git discovery cannot delay first-turn admission. The sessionId guard in
-        // baseline persistence fences completion from a replacement generation.
         if (!authority.hasActive()) {
           return;
         }
         if (await worktreeTitle?.persist(agentId, entry, key, storePath)) {
           emitSessionsChanged(context, { sessionKey: key, agentId, reason: "chat.title" });
         }
-        void captureCreatedSessionDiffBaseline({ key, agentId, cfg, entry, storePath });
         if (hasInitialTurn) {
           if (!authority.hasActive()) {
             return;
@@ -641,19 +638,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     registerCreatedSessionCategory(category, context);
-    if (created.resetExisting) {
-      void captureCreatedSessionDiffBaseline({
-        key: created.key,
-        agentId: created.agentId,
-        cfg,
-        entry: created.entry,
-        storePath: resolveGatewaySessionStoreTarget({
-          cfg,
-          key: created.key,
-          agentId: created.agentId,
-        }).storePath,
-      });
-    }
     const createdWorktree = sessionWorktree
       ? {
           id: sessionWorktree.id,
