@@ -67,6 +67,34 @@ describe("looksLikeUuid", () => {
 });
 
 describe("signal sender identity", () => {
+  it("publishes the configured account identity in status snapshots", async () => {
+    const account = "+15550001111";
+    const snapshot = await signalPlugin.status!.buildAccountSnapshot!({
+      cfg: {} as never,
+      account: {
+        accountId: "work",
+        enabled: true,
+        configured: true,
+        baseUrl: "http://127.0.0.1:8080",
+        config: { account },
+        transport: {
+          kind: "managed-native",
+          baseUrl: "http://127.0.0.1:8080",
+          cliPath: "signal-cli",
+          httpHost: "127.0.0.1",
+          httpPort: 8080,
+          startupTimeoutMs: 30_000,
+        },
+      } as never,
+    });
+
+    expect(snapshot).toMatchObject({
+      accountId: "work",
+      identity: account,
+      baseUrl: "http://127.0.0.1:8080",
+    });
+  });
+
   it("keeps IPv6 bind hosts on the managed transport", () => {
     expect(buildSignalSetupPatch({ httpHost: "::1", httpPort: "9090" })).toMatchObject({
       transport: {

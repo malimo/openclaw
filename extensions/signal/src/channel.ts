@@ -575,12 +575,12 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           probe?.version ? [{ text: `Signal daemon: ${probe.version}` }] : [],
         resolveAccountSnapshot: ({ account }) => ({
           accountId: account.accountId,
-          identity: account.config.account,
           name: account.name,
           enabled: account.enabled,
           configured: account.configured,
           extra: {
             baseUrl: account.baseUrl,
+            identity: account.config.account,
           },
         }),
       }),
