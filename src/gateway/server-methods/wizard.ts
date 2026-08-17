@@ -150,8 +150,6 @@ export const wizardHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    retainGatewayWorkUntilSettled(session);
-    context.wizardSessions.set(sessionId, session);
     const result = await session.next();
     if (result.done) {
       // Let the runner release setup admission before the terminal response,

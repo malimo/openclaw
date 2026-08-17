@@ -249,9 +249,9 @@ describe("gateway startup import boundaries", () => {
   it("fences config reload before gateway teardown and gateway_stop hooks", () => {
     const serverImpl = readServerImplementation();
     const closeStart = /close:\s*async\s*\([^)]*\)\s*=>/u.exec(serverImpl)?.index ?? -1;
-    const hookStart = serverImpl.indexOf('name: "gateway_stop plugin hooks"', closeStart);
-    const reloadStopStart = serverImpl.indexOf('name: "close prelude fence"', closeStart);
-    const terminalStopStart = serverImpl.indexOf('name: "terminal sessions"', closeStart);
+    const hookStart = serverImpl.indexOf("shutdownRuntime.runGlobalGatewayStopSafely", closeStart);
+    const reloadStopStart = serverImpl.indexOf("await beginClosePrelude()", closeStart);
+    const terminalStopStart = serverImpl.indexOf("terminalSessions.disposeAll()", closeStart);
     const markHelperStart = serverImpl.indexOf("const markClosePreludeStarted = () => {");
     const markHelperEnd = serverImpl.indexOf("};", markHelperStart);
     const beginHelperStart = serverImpl.indexOf("const beginClosePrelude = async () => {");

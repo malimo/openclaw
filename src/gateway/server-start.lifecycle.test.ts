@@ -32,10 +32,6 @@ vi.mock("./server-startup-finish.js", () => ({
   finishGatewayStartup: mocks.finishGatewayStartup,
 }));
 
-vi.mock("../plugins/hook-runner-global.js", () => ({
-  runGlobalGatewayStopSafely: mocks.runGlobalGatewayStopSafely,
-}));
-
 import { startGatewayServerCore } from "./server-start.js";
 
 function createKernel() {
@@ -57,6 +53,9 @@ function createKernel() {
     finishClosePrelude: vi.fn(async () => {
       mocks.calls.push("close-prelude");
     }),
+    shutdownRuntime: {
+      runGlobalGatewayStopSafely: mocks.runGlobalGatewayStopSafely,
+    },
     stopRegisteredGatewayLifetimeSidecars: vi.fn(async () => {
       mocks.calls.push("gateway-sidecars");
     }),
