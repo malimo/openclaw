@@ -24,7 +24,6 @@ import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessio
 import { runGit } from "../../agents/worktrees/git.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
-import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -76,12 +75,6 @@ const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 const MAX_BROWSER_ENTRIES = 250;
 const MAX_SEARCH_ENTRIES = 500;
 const MAX_SEARCH_VISITED_ENTRIES = 5_000;
-// Cache only successful probes: removed Git metadata can remain visible for at most five
-// seconds, while the entry cap bounds that stale-positive state to 128 workspaces.
-const GIT_CHECKOUT_STATUS_CACHE_MAX_ENTRIES = 128;
-const GIT_CHECKOUT_STATUS_CACHE_TTL_MS = 5_000;
-type GitCheckoutStatusCacheEntry = { expiresAtMs: number; value: true };
-const gitCheckoutStatusCache = new Map<string, GitCheckoutStatusCacheEntry>();
 const gitCheckoutStatusProbes = new Map<string, Promise<boolean>>();
 // Matches file-type's documented default buffer sample while keeping metadata
 // classification independent from the 256 KiB inline-content cap.
@@ -565,16 +558,6 @@ async function loadGitCheckoutStatus(diffCwd: string | undefined): Promise<boole
     return undefined;
   }
   const cacheKey = path.resolve(diffCwd);
-  const cached = gitCheckoutStatusCache.get(cacheKey);
-  if (cached) {
-    if (cached.expiresAtMs > Date.now()) {
-      gitCheckoutStatusCache.delete(cacheKey);
-      gitCheckoutStatusCache.set(cacheKey, cached);
-      return cached.value;
-    }
-    gitCheckoutStatusCache.delete(cacheKey);
-  }
-
   const activeProbe = gitCheckoutStatusProbes.get(cacheKey);
   if (activeProbe) {
     return await activeProbe;
@@ -590,15 +573,7 @@ async function loadGitCheckoutStatus(diffCwd: string | undefined): Promise<boole
   })();
   gitCheckoutStatusProbes.set(cacheKey, promise);
   try {
-    const value = await promise;
-    if (value) {
-      gitCheckoutStatusCache.set(cacheKey, {
-        expiresAtMs: Date.now() + GIT_CHECKOUT_STATUS_CACHE_TTL_MS,
-        value,
-      });
-      pruneMapToMaxSize(gitCheckoutStatusCache, GIT_CHECKOUT_STATUS_CACHE_MAX_ENTRIES);
-    }
-    return value;
+    return await promise;
   } finally {
     if (gitCheckoutStatusProbes.get(cacheKey) === promise) {
       gitCheckoutStatusProbes.delete(cacheKey);

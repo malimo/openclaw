@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sessionsFilesHandlers } from "./sessions-files.js";
@@ -94,9 +95,17 @@ describe("sessions.workspace.status RPC handler", () => {
     );
     expect(checkoutPayload.gitCheckout).toBe(true);
     expect(hoisted.readSessionTranscriptVisibleMessageDeltaCore).not.toHaveBeenCalled();
+
+    fs.rmSync(path.join(workspaceRoot, ".git"), { force: true, recursive: true });
+    const removedCheckoutPayload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.workspace.status", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(removedCheckoutPayload.gitCheckout).toBe(false);
   });
 
-  it("coalesces cold checkout probes and reuses the positive result", async () => {
+  it("coalesces only concurrent checkout probes", async () => {
     let finishProbe: (result: { code: number; stderr: string; stdout: string }) => void = () => {};
     hoisted.runGit.mockImplementationOnce(
       async () =>
@@ -121,13 +130,14 @@ describe("sessions.workspace.status RPC handler", () => {
     expect(firstPayload.gitCheckout).toBe(true);
     expect(secondPayload).toEqual(firstPayload);
 
-    const cachedPayload = expectOkPayload(
+    hoisted.runGit.mockResolvedValueOnce({ code: 1, stderr: "not a checkout", stdout: "" });
+    const freshPayload = expectOkPayload(
       await invokeSessionFilesHandler("sessions.workspace.status", {
         sessionKey: "agent:main:main",
       }),
     );
-    expect(cachedPayload).toEqual(firstPayload);
-    expect(hoisted.runGit).toHaveBeenCalledOnce();
+    expect(freshPayload.gitCheckout).toBe(false);
+    expect(hoisted.runGit).toHaveBeenCalledTimes(2);
   });
 
   it("does not queue a healthy workspace behind stalled probes", async () => {
