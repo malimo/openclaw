@@ -2,6 +2,7 @@ import {
   readSystemAgentInferenceUnavailableErrorDetails,
   type SystemAgentChatResult,
 } from "@openclaw/gateway-protocol";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -67,8 +68,7 @@ export function resolveCustodianSetupIssue(
   error: unknown,
   configuredInferenceState: CustodianConfiguredInferenceState,
 ): "missing" | "unavailable" | null {
-  const details =
-    error && typeof error === "object" ? (error as { details?: unknown }).details : undefined;
+  const details = isRecord(error) ? error.details : undefined;
   return readSystemAgentInferenceUnavailableErrorDetails(details) === undefined
     ? null
     : configuredInferenceState === "required"
