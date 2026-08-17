@@ -61,6 +61,7 @@ export function isSignalManagedDaemonOwned(owner: SignalManagedDaemonOwner): boo
     channelId: "signal",
     accountId: owner.accountId,
     capability: SIGNAL_MANAGED_DAEMON_OWNER_CAPABILITY,
+    // SAFETY: this module is the sole registrar for the private capability key.
   }) as SignalManagedDaemonOwnerContext | undefined;
   return Boolean(
     context && !context.handle.isExited() && sameManagedDaemonOwner(context.owner, owner),

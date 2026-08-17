@@ -50,6 +50,7 @@ function hasExactAppliedGatewayConfig(params: {
     return false;
   }
   const gatewayAccount = resolveSignalAccount({
+    // SAFETY: config.get supplies canonical config after the record check above.
     cfg: params.payload.sourceConfig as OpenClawConfig,
     accountId: params.accountId,
   });
