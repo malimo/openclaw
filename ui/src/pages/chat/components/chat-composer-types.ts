@@ -128,8 +128,9 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onDraftChange: (next: string) => void;
   onCompletionOwnerChange?: () => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
-  onCompletionOwnerChange?: () => void;
   onSlashIntent?: () => void | Promise<void>;
+  /** Route-owned Enter semantics that run before ordinary message submission. */
+  onSubmitShortcut?: () => boolean;
   onSend: (followUpModeOverride?: "steer") => void;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;

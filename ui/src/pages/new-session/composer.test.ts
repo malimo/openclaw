@@ -161,7 +161,7 @@ describe("new-session composer prompt authoring", () => {
     input("Polish this with $pro");
     const skillMenu = container.querySelector<HTMLElement>("[role='listbox']");
     expect(skillMenu?.getAttribute("aria-label")).toBe("Skill references");
-    expect(skillMenu?.querySelector(".slash-menu-name")?.textContent).toBe("$prose");
+    expect(skillMenu?.querySelector(".slash-menu-name")?.textContent).toBe("prose");
 
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     textarea?.dispatchEvent(

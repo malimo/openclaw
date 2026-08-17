@@ -210,6 +210,10 @@ export function createComposerKeyDownHandler({
 
     const sendShortcutMatches = sendShortcut === "enter" || event.metaKey || event.ctrlKey;
     if (event.key === "Enter" && !event.shiftKey && sendShortcutMatches) {
+      if (props.onSubmitShortcut?.()) {
+        event.preventDefault();
+        return;
+      }
       const attachments = props.getAttachments?.() ?? props.attachments ?? [];
       const hasComposedContent = Boolean(target.value.trim() || attachments.length);
       if (!hasComposedContent) {

@@ -231,6 +231,13 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
           });
         }
       : undefined,
+    onSubmitShortcut: () => {
+      if (!options.canSubmit && options.submitDisabledReason === undefined) {
+        return false;
+      }
+      options.onSubmit();
+      return true;
+    },
     onSend: options.onSubmit,
     onAttachmentsChange: options.onAttachmentsChange,
     statusContent: options.blockedSubmitNotice
