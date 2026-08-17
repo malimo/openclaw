@@ -101,7 +101,7 @@ describe("openclaw.setup", () => {
     const { calls, respond } = makeRespond();
 
     await systemAgentHandler("openclaw.setup.auth.start")({
-      params: { sessionId: "auth-session-1", authChoice: "github-copilot" },
+      params: { sessionId: "auth-session-1", agentId: "research", authChoice: "github-copilot" },
       respond,
       context,
     } as never);
@@ -115,6 +115,7 @@ describe("openclaw.setup", () => {
     expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "provider-auth", authChoice: "github-copilot" }),
     );
+    expect(setupInferenceMocks.activateSetupInference.mock.calls[0]?.[0].agentId).toBe("research");
     expect(setupInferenceMocks.activateSetupInference.mock.calls[0]?.[0].signal).toBe(
       session.signal,
     );
@@ -145,6 +146,7 @@ describe("openclaw.setup", () => {
     await systemAgentHandler("openclaw.setup.prepare.start")({
       params: {
         sessionId: "prepare-session-1",
+        agentId: "research",
         authChoice: "ollama",
         workspace: "/tmp/models-workspace",
       },
@@ -165,6 +167,7 @@ describe("openclaw.setup", () => {
     expect(providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider).toHaveBeenCalledWith(
       expect.objectContaining({
         authChoice: "ollama",
+        agentId: "research",
         config: verifiedConfig,
         workspaceDir: "/tmp/models-workspace",
         setDefaultModel: false,
@@ -210,7 +213,7 @@ describe("openclaw.setup execution", () => {
     const activeAtResponse: number[] = [];
 
     const pending = systemAgentHandler("openclaw.setup.detect")({
-      params: {},
+      params: { agentId: "research" },
       respond: () => {
         activeAtResponse.push(systemAgentLane().activeCount);
       },
@@ -222,7 +225,9 @@ describe("openclaw.setup execution", () => {
     await pending;
 
     expect(activeAtResponse).toEqual([0]);
-    expect(systemAgentLane().activeCount).toBe(0);
+    const [detectOptions] =
+      setupInferenceDetectionMocks.detectSetupInferenceIsolated.mock.calls[0]!;
+    expect(detectOptions?.agentId).toBe("research");
   });
 
   it.each([
@@ -242,9 +247,13 @@ describe("openclaw.setup execution", () => {
     setupInferenceMocks.verifySetupInference.mockResolvedValueOnce(result);
     const { calls, respond } = makeRespond();
 
-    await systemAgentHandler("openclaw.setup.verify")({ params: {}, respond } as never);
+    await systemAgentHandler("openclaw.setup.verify")({
+      params: { agentId: "research" },
+      respond,
+    } as never);
 
     expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledWith({
+      agentId: "research",
       runtime: defaultRuntime,
     });
     expect(calls).toEqual([{ ok: true, payload: result, error: undefined }]);
@@ -282,6 +291,7 @@ describe("openclaw.setup execution", () => {
     const pending = systemAgentHandler("openclaw.setup.activate")({
       params: {
         kind: "api-key",
+        agentId: "research",
         modelRef: "openai/gpt-5.5",
         authChoice: "openai-api-key",
         apiKey: "test-key",
@@ -300,6 +310,7 @@ describe("openclaw.setup execution", () => {
 
     expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledWith({
       kind: "api-key",
+      agentId: "research",
       modelRef: "openai/gpt-5.5",
       authChoice: "openai-api-key",
       apiKey: "test-key",
