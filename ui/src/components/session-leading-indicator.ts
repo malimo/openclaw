@@ -113,7 +113,7 @@ export function renderSessionLeadingState(
   session: SidebarRecentSession,
   pullRequestState: SessionPullRequestIndicatorState,
   ownerActor: SessionCreatedActor | null | undefined,
-  attribution: "created" | "archived",
+  attribution: "created" | "owned" | "archived",
   ownerViewing?: boolean,
 ): {
   running: boolean;
