@@ -213,6 +213,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const p = params as SessionsListParams;
     const cfg = context.getRuntimeConfig();
     const configuredAgentsOnly = p.configuredAgentsOnly === true;
+    const identityId = gatewayClientSessionCreator(client)?.id;
     const run = () =>
       measureDiagnosticsTimelineSpan(
         "gateway.sessions.list",
@@ -280,13 +281,13 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 store: loaded.store,
                 modelCatalog,
                 opts: p,
+                ...(p.involvingMe === true && identityId ? { involvingActorId: identityId } : {}),
               }),
             {
               config: cfg,
               phase: "sessions.list",
             },
           );
-          const identityId = gatewayClientSessionCreator(client)?.id;
           const { sharingTargets, membershipKeys } = await measureDiagnosticsTimelineSpan(
             "gateway.sessions.list.sharing",
             () => {
