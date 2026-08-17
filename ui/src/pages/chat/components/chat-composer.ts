@@ -157,7 +157,7 @@ export function renderChatComposer(props: ChatComposerProps) {
           prompt.status === "pending" &&
           prompt.sessionKey !== undefined &&
           areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey),
-       ) ?? [])
+      ) ?? [])
     : [];
   let gatewayQuestionIndex = gatewayQuestionPrompts.findIndex(
     (prompt) => prompt.id === state.activeGatewayQuestionId,
