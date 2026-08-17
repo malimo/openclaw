@@ -54,7 +54,6 @@
     <string name="native_049579fa8efbaa1b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Lyssnar (PTT)"</string>
     <string name="native_04a3a0e94565c95d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Förslaget avvisades."</string>
     <string name="native_04efae3fc7825d3a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Visa sidofält"</string>
-    <string name="native_04f8996da763b7a9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"användare"</string>
     <string name="native_057b5de48d7b90f1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Minimal"</string>
     <string name="native_05a2d7332eb9d8bf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Neka"</string>
     <string name="native_05dd0c51d15c5db7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"AKTIV AGENT"</string>
@@ -573,6 +572,7 @@
     <string name="native_55d8e7da6d0a752c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Högtalare avstängd"</string>
     <string name="native_560d3e826c413dc9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sök efter trådar"</string>
     <string name="native_565339bc4d33d728" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OK"</string>
+    <string name="native_569ca49f4aaf7846" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Installera"</string>
     <string name="native_56a508f3f2bf424a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Det gick inte att öppna konfigurationsguiden."</string>
     <string name="native_56c41c606c44f3fc" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"fråga OpenClaw %1$s"</string>
     <string name="native_56c4c3d30ceda56e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wait for Agents"</string>
@@ -912,6 +912,7 @@
     <string name="native_8a51ea11834daf37" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Detta tillämpar \"%1$s\" och uppdaterar statusen för Skill Workshop från Gateway."</string>
     <string name="native_8a6ec210c09d2e1d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway är offline"</string>
     <string name="native_8a91d3fbc8c93e75" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"openclaw devices list"</string>
+    <string name="native_8ab6bd3b9c656e1d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inte skannad av ClawHub"</string>
     <string name="native_8ad740f465465253" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Anslutningsstatus för OpenClaw-nod"</string>
     <string name="native_8b0f09e8f3b1c389" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Varningar stannar på den här telefonen."</string>
     <string name="native_8b8f03b41e1c066b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw kan ta emot valda varningar."</string>
@@ -1078,7 +1079,6 @@
     <string name="native_a330395cc0a53ad1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"list"</string>
     <string name="native_a34f54e488b48e66" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway registrerade godkännandet och sparade valet."</string>
     <string name="native_a37cf0a1111bf41c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ange en giltig manuell slutpunkt för att ansluta."</string>
-    <string name="native_a39a7ffad4a3013f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"assistent"</string>
     <string name="native_a3e96435cb1ec7c8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skickar till chatten..."</string>
     <string name="native_a4212f1e2fb0f506" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Spara profil"</string>
     <string name="native_a424e33d90931d1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Låst"</string>

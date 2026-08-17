@@ -54,7 +54,6 @@
     <string name="native_049579fa8efbaa1b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"聞き取り中（PTT）"</string>
     <string name="native_04a3a0e94565c95d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"提案を却下しました。"</string>
     <string name="native_04efae3fc7825d3a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"サイドバーを表示"</string>
-    <string name="native_04f8996da763b7a9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ユーザー"</string>
     <string name="native_057b5de48d7b90f1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"最小"</string>
     <string name="native_05a2d7332eb9d8bf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"拒否"</string>
     <string name="native_05dd0c51d15c5db7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"アクティブなエージェント"</string>
@@ -573,6 +572,7 @@
     <string name="native_55d8e7da6d0a752c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"スピーカーはミュート中"</string>
     <string name="native_560d3e826c413dc9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"スレッドを検索"</string>
     <string name="native_565339bc4d33d728" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OK"</string>
+    <string name="native_569ca49f4aaf7846" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"インストール"</string>
     <string name="native_56a508f3f2bf424a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"セットアップガイドを開けませんでした。"</string>
     <string name="native_56c41c606c44f3fc" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw に %1$s を尋ねる"</string>
     <string name="native_56c4c3d30ceda56e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wait for Agents"</string>
@@ -912,6 +912,7 @@
     <string name="native_8a51ea11834daf37" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"「%1$s」を適用し、GatewayからSkill Workshopの状態を更新します。"</string>
     <string name="native_8a6ec210c09d2e1d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway オフライン"</string>
     <string name="native_8a91d3fbc8c93e75" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"openclaw devices list"</string>
+    <string name="native_8ab6bd3b9c656e1d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ClawHubによる未スキャン"</string>
     <string name="native_8ad740f465465253" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw node の接続ステータス"</string>
     <string name="native_8b0f09e8f3b1c389" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"アラートはこの電話に留まります。"</string>
     <string name="native_8b8f03b41e1c066b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw は選択したアラートを受信できます。"</string>
@@ -1078,7 +1079,6 @@
     <string name="native_a330395cc0a53ad1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"list"</string>
     <string name="native_a34f54e488b48e66" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway が承認を記録し、選択を保存しました。"</string>
     <string name="native_a37cf0a1111bf41c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"接続する有効な手動エンドポイントを入力してください。"</string>
-    <string name="native_a39a7ffad4a3013f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"アシスタント"</string>
     <string name="native_a3e96435cb1ec7c8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"チャットに送信中..."</string>
     <string name="native_a4212f1e2fb0f506" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"プロフィールを保存"</string>
     <string name="native_a424e33d90931d1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ロック中"</string>
