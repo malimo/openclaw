@@ -11,9 +11,10 @@ import {
 } from "../control-ui-github-preview.js";
 import { parseControlUiSessionPullRequestsSubscribeParams } from "../control-ui-session-pr-subscriptions.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import { createSessionListEntryFilter } from "../session-sharing.js";
 import { buildGatewaySessionRow } from "../session-utils.js";
 import { loadSessionEntriesForTarget } from "./sessions-shared.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 type LoadGitHubPreview = (
   target: ControlUiGitHubPreviewTarget,
@@ -34,6 +35,7 @@ type SessionPreviewSource = {
 type LoadSessionPreview = (
   sessionKey: string,
   context: GatewayRequestContext,
+  client: GatewayClient | null,
 ) => SessionPreviewSource | null | Promise<SessionPreviewSource | null>;
 
 const SESSION_PREVIEW_TEXT_MAX_CHARS = 200;
@@ -81,6 +83,7 @@ function projectSessionPreview(source: SessionPreviewSource | null): ControlUiSe
 function loadControlUiSessionPreview(
   sessionKey: string,
   context: GatewayRequestContext,
+  client: GatewayClient | null,
 ): SessionPreviewSource | null {
   const cfg = context.getRuntimeConfig();
   const requestedAgent = resolveRequestedGlobalAgentId(cfg, sessionKey);
@@ -93,6 +96,13 @@ function loadControlUiSessionPreview(
     ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
   });
   if (!entry) {
+    return null;
+  }
+  // Hover previews must not reveal more than sessions.list: apply the same
+  // incognito/draft sharing predicate so a member cannot preview-by-key a
+  // session the sidebar hides from them.
+  const entryFilter = createSessionListEntryFilter({ client });
+  if (entryFilter && !entryFilter(target.canonicalKey, entry)) {
     return null;
   }
   const row = buildGatewaySessionRow({
@@ -146,7 +156,7 @@ export function createControlUiHandlers(
         );
       }
     },
-    "controlUi.sessionPreview": async ({ params, context, respond }) => {
+    "controlUi.sessionPreview": async ({ params, client, context, respond }) => {
       const sessionKey = parseSessionPreviewKey(params);
       if (!sessionKey) {
         respond(
@@ -159,7 +169,7 @@ export function createControlUiHandlers(
       try {
         respond(
           true,
-          projectSessionPreview(await loadSessionPreview(sessionKey, context)),
+          projectSessionPreview(await loadSessionPreview(sessionKey, context, client)),
           undefined,
         );
       } catch {
