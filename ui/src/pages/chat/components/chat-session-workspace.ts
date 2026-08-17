@@ -776,9 +776,7 @@ export function createSessionWorkspaceProps(
   const diffAdvertised = isGatewayMethodAdvertised(state, "sessions.diff") === true;
   const statusAdvertised = isGatewayMethodAdvertised(state, "sessions.workspace.status") === true;
   if (
-    (options?.expanded === true ||
-      !workspace.collapsed ||
-      (diffAdvertised && !statusAdvertised)) &&
+    (options?.expanded === true || !workspace.collapsed || (diffAdvertised && !statusAdvertised)) &&
     state.connected &&
     state.agentsList &&
     !workspace.loading &&

@@ -60,8 +60,34 @@ describe("session workspace state", () => {
       expect(createSessionWorkspaceProps(state).onOpenDiff).toBeTypeOf("function"),
     );
   });
+  it("keeps the older-gateway diff action hidden for a non-git workspace", async () => {
+    const listFiles = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:current",
+      gitCheckout: false,
+      files: [],
+    });
+    const state = {
+      agentsList: { agents: [{ id: "main" }], defaultId: "main" },
+      client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
+      connected: true,
+      handleOpenSidebar: vi.fn(),
+      hello: gatewayHello(["sessions.diff"]),
+      requestUpdate: vi.fn(),
+      sessionKey: "agent:main:current",
+      sessions: { listFiles },
+    } as unknown as SessionWorkspaceHost;
+
+    expect(createSessionWorkspaceProps(state).onOpenDiff).toBeUndefined();
+    await vi.waitFor(() => expect(listFiles).toHaveBeenCalledOnce());
+    expect(createSessionWorkspaceProps(state).onOpenDiff).toBeUndefined();
+  });
   it("does not let an older collapsed status overwrite an expanded workspace result", async () => {
     let finishStatus: (value: { gitCheckout: boolean; sessionKey: string }) => void = () => {};
+    const listFiles = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:current",
+      gitCheckout: true,
+      files: [],
+    });
     const request = vi.fn((method: string) =>
       method === "sessions.workspace.status"
         ? new Promise((resolve) => {
@@ -77,21 +103,21 @@ describe("session workspace state", () => {
       hello: gatewayHello(["sessions.diff", "sessions.workspace.status"]),
       requestUpdate: vi.fn(),
       sessionKey: "agent:main:current",
-      sessions: {
-        listFiles: vi.fn().mockResolvedValue({
-          sessionKey: "agent:main:current",
-          gitCheckout: true,
-          files: [],
-        }),
-      },
+      sessions: { listFiles },
     } as unknown as SessionWorkspaceHost;
 
     createSessionWorkspaceProps(state);
     createSessionWorkspaceProps(state, { expanded: true });
+    await vi.waitFor(() => expect(listFiles).toHaveBeenCalledOnce());
     await vi.waitFor(() =>
-      expect(createSessionWorkspaceProps(state, { expanded: true }).onOpenDiff).toBeTypeOf(
-        "function",
-      ),
+      expect(state.sessionWorkspaceState).toMatchObject({
+        gitCheckout: true,
+        loading: false,
+        statusLoaded: true,
+      }),
+    );
+    expect(createSessionWorkspaceProps(state, { expanded: true }).onOpenDiff).toBeTypeOf(
+      "function",
     );
 
     finishStatus({ gitCheckout: false, sessionKey: "agent:main:current" });
