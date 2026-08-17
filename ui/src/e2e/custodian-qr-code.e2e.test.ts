@@ -1,6 +1,7 @@
 // Control UI proves the generic system-agent QR wizard step through a mocked Gateway.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { GATEWAY_CLIENT_CAPS } from "@openclaw/gateway-client/browser";
 import { chromium, type Browser } from "playwright";
 import qrcode from "qrcode";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -96,6 +97,10 @@ describeE2e("Custodian QR wizard step", () => {
           })
         )?.status(),
       ).toBe(200);
+      const connect = (await gateway.getRequests("connect")).at(-1);
+      expect(connect?.params).toMatchObject({
+        caps: expect.arrayContaining([GATEWAY_CLIENT_CAPS.SYSTEM_AGENT_QR_CODE]),
+      });
       const image = page.getByAltText("QR code for setup");
       await image.waitFor();
 
