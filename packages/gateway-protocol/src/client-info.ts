@@ -86,6 +86,7 @@ export const GATEWAY_CLIENT_CAPS = {
   RUN_TOOL_BINDINGS: "run-tool-bindings",
   SESSION_SCOPED_EVENTS: "session-scoped-events",
   PLUGIN_APPROVALS: "plugin-approvals",
+  /** Renders and securely retires passive QR steps, including polling and reconnect recovery. */
   SYSTEM_AGENT_QR_CODE: "system-agent-qr-code",
   TASK_SUGGESTIONS: "task-suggestions",
   TERMINAL_OFFSET_SEQ: "terminal-offset-seq",

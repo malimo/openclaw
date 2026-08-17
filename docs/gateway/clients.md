@@ -140,9 +140,13 @@ System-agent setup is administrative. Request `operator.admin` when pairing the
 device; every `openclaw.chat` call in this flow, including setup, polling,
 cancellation, and reset, requires that scope.
 
-Advertise `GATEWAY_CLIENT_CAPS.SYSTEM_AGENT_QR_CODE` only when the client can
-render a QR image. A capable `openclaw.chat` session can then receive a QR
-`step` through the same wizard-step contract used for other setup controls:
+Advertise `GATEWAY_CLIENT_CAPS.SYSTEM_AGENT_QR_CODE` only when the client
+implements the complete passive QR lifecycle: render and expire the image,
+poll through `wizardSettling`, resume the same poll after a same-owner
+reconnect, handle invalidation and reset, and scrub every QR reference after
+completion, expiry, cancellation, or disconnect. Rendering alone is not
+sufficient. A capable `openclaw.chat` session can then receive a QR `step`
+through the same wizard-step contract used for other setup controls:
 
 ```json
 {
