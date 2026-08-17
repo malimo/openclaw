@@ -27,7 +27,7 @@ import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
-import type { ToolErrorSummary } from "../../tool-error-summary.js";
+import type { ToolErrorSummary, ToolRecoverySummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
@@ -79,6 +79,7 @@ type EmbeddedRunAttemptToolTerminalObservation = {
 
 type EmbeddedRunAttemptToolTerminalResolution = {
   lastToolError?: ToolErrorSummary;
+  lastToolRecovery?: ToolRecoverySummary;
   executionStarted: boolean;
   executedArguments?: Record<string, unknown>;
   sideEffectEvidence: boolean;
@@ -279,6 +280,7 @@ export type EmbeddedRunAttemptResult = {
   /** Completed message_end snapshot owned by this model attempt. */
   currentAttemptCompletedAssistant?: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;
+  lastToolRecovery?: ToolRecoverySummary;
   didSendViaMessagingTool: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;

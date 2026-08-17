@@ -3,6 +3,7 @@ import { completeEmbeddedAttemptResult } from "./attempt-result.js";
 
 function completeResult(params?: {
   latestMcpAppChannelView?: { viewId: string };
+  lastToolRecovery?: { toolName: string };
   clientToolCallSlots?: Array<{
     toolCallId: string;
     name: string;
@@ -41,6 +42,7 @@ function completeResult(params?: {
       getLastAssistantTextMessageIndex: () => undefined,
       getLastCompactionTokensAfter: () => undefined,
       getLastToolError: () => undefined,
+      getLastToolRecovery: () => params?.lastToolRecovery,
       getLatestMcpAppChannelView: () => params?.latestMcpAppChannelView,
       getMessagingToolSentMediaUrls: () => [],
       getMessagingToolSentTargets: () => [],
@@ -148,5 +150,11 @@ describe("attempt result projection", () => {
         latestMcpAppChannelView: { viewId: "view-latest" },
       }).latestMcpAppChannelView,
     ).toEqual({ viewId: "view-latest" });
+  });
+
+  it("projects the last recovered tool", () => {
+    expect(completeResult({ lastToolRecovery: { toolName: "edit" } }).lastToolRecovery).toEqual({
+      toolName: "edit",
+    });
   });
 });

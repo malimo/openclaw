@@ -58,7 +58,11 @@ import {
   extractAssistantVisibleText,
   sanitizeAssistantVisibleStreamText,
 } from "../../embedded-agent-utils.js";
-import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
+import {
+  isExecLikeToolName,
+  type ToolErrorSummary,
+  type ToolRecoverySummary,
+} from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
 import { hasExplicitMutatingToolFailureAcknowledgement } from "./tool-failure-acknowledgement.js";
@@ -527,6 +531,7 @@ export function buildEmbeddedRunPayloads(params: {
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
   lastToolError?: ToolErrorSummary;
+  lastToolRecovery?: ToolRecoverySummary;
   config?: OpenClawConfig;
   isCronTrigger?: boolean;
   isHeartbeatTrigger?: boolean;
@@ -805,6 +810,12 @@ export function buildEmbeddedRunPayloads(params: {
     if (cleanedText && hasExplicitMutatingToolFailureAcknowledgement(cleanedText)) {
       hasUserFacingFailureAcknowledgement = true;
     }
+  }
+  if (params.lastToolRecovery) {
+    const toolLabel = formatToolAggregate(params.lastToolRecovery.toolName, undefined, {
+      markdown: useMarkdown,
+    });
+    replyItems.push({ text: `✅ ${toolLabel} succeeded after retry.` });
   }
   if (params.lastToolError) {
     const warningPolicy = resolveToolErrorWarningPolicy({

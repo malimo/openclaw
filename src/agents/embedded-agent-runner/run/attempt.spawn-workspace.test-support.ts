@@ -156,6 +156,7 @@ function createSubscriptionMock(): SubscriptionMock {
     didSendViaMessagingTool: () => false,
     didSendDeterministicApprovalPrompt: () => false,
     getLastToolError: () => undefined,
+    getLastToolRecovery: () => undefined,
     getUsageTotals: () => undefined,
     getLastAssistantUsage: () => undefined,
     getAssistantTurnCount: () => 0,

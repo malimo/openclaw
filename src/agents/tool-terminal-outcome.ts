@@ -6,7 +6,7 @@ import {
 } from "./agent-tools.before-tool-call.state.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
 import { createToolErrorState } from "./tool-error-state.js";
-import type { ToolErrorSummary } from "./tool-error-summary.js";
+import type { ToolErrorSummary, ToolRecoverySummary } from "./tool-error-summary.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 
 /** Build one attempt-scoped facts-in/state-out terminal observer for every harness. */
@@ -33,6 +33,7 @@ export function createToolTerminalObserver(
       buildToolMutationState(observation.toolName, executedArguments, observation.meta);
 
     let lastToolError: ToolErrorSummary | undefined;
+    let lastToolRecovery: ToolRecoverySummary | undefined;
     if (observation.outcome === "failure") {
       const mutatingAction = executionStarted && mutation.mutatingAction;
       lastToolError = errors.recordFailure({
@@ -46,16 +47,22 @@ export function createToolTerminalObserver(
         ...(mutatingAction && mutation.fileTarget ? { fileTarget: mutation.fileTarget } : {}),
       });
     } else {
-      lastToolError = errors.recordSuccess({
+      const success = errors.recordSuccess({
         toolName: observation.toolName,
         ...(observation.meta ? { meta: observation.meta } : {}),
         ...(mutation.actionFingerprint ? { actionFingerprint: mutation.actionFingerprint } : {}),
         ...(mutation.fileTarget ? { fileTarget: mutation.fileTarget } : {}),
       });
+      if (success.kind === "unresolved") {
+        lastToolError = success.lastToolError;
+      } else if (success.kind === "recovered") {
+        lastToolRecovery = success.lastToolRecovery;
+      }
     }
 
     return {
       ...(lastToolError ? { lastToolError } : {}),
+      ...(lastToolRecovery ? { lastToolRecovery } : {}),
       executionStarted,
       ...(executedArguments ? { executedArguments } : {}),
       sideEffectEvidence: executionStarted && !mutation.replaySafe,

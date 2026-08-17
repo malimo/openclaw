@@ -157,6 +157,7 @@ export function completeEmbeddedAttemptResult(
     getLastAssistantTextMessageIndex,
     getLastCompactionTokensAfter,
     getLastToolError,
+    getLastToolRecovery,
     getLatestMcpAppChannelView,
     getMessagingToolSentMediaUrls,
     getMessagingToolSentTargets,
@@ -301,6 +302,7 @@ export function completeEmbeddedAttemptResult(
     completedClientToolCalls.length > 0 ? completedClientToolCalls : undefined;
   const didSendDeterministicApprovalPromptNow = didSendDeterministicApprovalPrompt();
   const lastToolError = getLastToolError();
+  const lastToolRecovery = getLastToolRecovery();
   const heartbeatToolResponse = getHeartbeatToolResponse();
   const messagingToolSourceReplyPayloads = getMessagingToolSourceReplyPayloads();
   const hasToolMediaBlockReplyNow = hasToolMediaBlockReply();
@@ -387,6 +389,7 @@ export function completeEmbeddedAttemptResult(
     toolMetas: toolMetasNormalized,
     acceptedSessionSpawns,
     lastToolError,
+    lastToolRecovery,
     didSendViaMessagingTool: didSendViaMessagingTool(),
     didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
     messagingToolSentTexts: getMessagingToolSentTexts(),
