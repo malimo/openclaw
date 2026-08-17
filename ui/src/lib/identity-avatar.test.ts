@@ -259,9 +259,7 @@ describe("authenticated profile avatar cache", () => {
     expect(fetchAvatar).toHaveBeenCalledTimes(2);
   });
 
-  it("cools down a missing avatar before retrying the same unrevisioned route", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+  it("retries an unrevisioned avatar immediately after a missing response", async () => {
     setAvatarGatewayOrigin("https://gateway.example.test", "Bearer profile-token");
     const fetchAvatar = vi
       .spyOn(globalThis, "fetch")
@@ -274,10 +272,6 @@ describe("authenticated profile avatar cache", () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:profile-uploaded");
 
     await expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar")).resolves.toBeNull();
-    await expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar")).resolves.toBeNull();
-    expect(fetchAvatar).toHaveBeenCalledOnce();
-
-    await vi.advanceTimersByTimeAsync(30_000);
     await expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar")).resolves.toBe(
       "blob:profile-uploaded",
     );
