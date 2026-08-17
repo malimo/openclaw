@@ -230,7 +230,7 @@ export async function loadSessionTouchedFilesInWorker(
   }
 }
 
-export async function closeSessionTouchedFilesWorker(): Promise<void> {
+async function closeSessionTouchedFilesWorker(): Promise<void> {
   if (closing) {
     return await closing;
   }
@@ -340,11 +340,4 @@ export function acquireSessionTouchedFilesWorkerForGateway(): () => Promise<void
     acceptingRequests = false;
     await closeSessionTouchedFilesWorker();
   };
-}
-
-export async function terminateSessionTouchedFilesWorkerForTest(): Promise<void> {
-  const cleanupError = await stopWorker(new Error("session touched-files worker test termination"));
-  if (cleanupError) {
-    throw cleanupError;
-  }
 }

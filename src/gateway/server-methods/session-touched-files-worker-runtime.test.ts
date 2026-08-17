@@ -16,9 +16,7 @@ import {
 import {
   acquireSessionTouchedFilesWorkerAdmissionFence,
   acquireSessionTouchedFilesWorkerForGateway,
-  closeSessionTouchedFilesWorker,
   loadSessionTouchedFilesInWorker,
-  terminateSessionTouchedFilesWorkerForTest,
 } from "./session-touched-files-worker-runtime.js";
 
 const temporaryDirectories: string[] = [];
@@ -27,6 +25,15 @@ let releaseGatewayWorker: (() => Promise<void>) | undefined;
 beforeEach(() => {
   releaseGatewayWorker = acquireSessionTouchedFilesWorkerForGateway();
 });
+
+function closeWorkerThroughGatewayOwner(): Promise<void> {
+  const release = releaseGatewayWorker;
+  releaseGatewayWorker = undefined;
+  if (!release) {
+    throw new Error("session touched-files worker has no Gateway owner");
+  }
+  return release();
+}
 
 afterEach(async () => {
   await releaseGatewayWorker?.();
@@ -97,7 +104,7 @@ describe("session touched-files worker runtime", () => {
       message: { role: "assistant", content: [] },
     });
     await loadSessionTouchedFilesInWorker(scope, `main\0worker-close-session\0${storePath}`);
-    await closeSessionTouchedFilesWorker();
+    await closeWorkerThroughGatewayOwner();
 
     expect(
       openOpenClawStateDatabase({ env })
@@ -152,7 +159,8 @@ describe("session touched-files worker runtime", () => {
         `main\0worker-admission-session\0${storePath}`,
       );
       let closeCompleted = false;
-      const close = closeSessionTouchedFilesWorker().then(() => {
+      const close = acquireSessionTouchedFilesWorkerAdmissionFence().then((releaseFence) => {
+        releaseFence();
         closeCompleted = true;
       });
       await Promise.resolve();
@@ -191,7 +199,9 @@ describe("session touched-files worker runtime", () => {
       await Promise.resolve();
       expect(postMessageSpy).toHaveBeenCalledWith(expect.objectContaining({ type: "load" }), []);
 
-      const close = closeSessionTouchedFilesWorker();
+      const close = acquireSessionTouchedFilesWorkerAdmissionFence().then((releaseFence) => {
+        releaseFence();
+      });
       await vi.advanceTimersByTimeAsync(5_000);
 
       await expect(load).rejects.toThrow("session touched-files worker shutdown timed out");
@@ -258,7 +268,13 @@ describe("session touched-files worker runtime", () => {
     await appendTranscriptMessage(scope, {
       message: { role: "assistant", content: [] },
     });
+    const postMessageSpy = vi.spyOn(Worker.prototype, "postMessage");
     await loadSessionTouchedFilesInWorker(scope, `main\0worker-terminate-session\0${storePath}`);
+    const activeWorker = postMessageSpy.mock.instances.at(-1);
+    postMessageSpy.mockRestore();
+    if (!(activeWorker instanceof Worker)) {
+      throw new Error("session touched-files worker was not created");
+    }
     let releaseTermination: () => void = () => {};
     const terminationGate = new Promise<void>((resolve) => {
       releaseTermination = resolve;
@@ -272,22 +288,29 @@ describe("session touched-files worker runtime", () => {
         });
       });
     try {
-      const termination = terminateSessionTouchedFilesWorkerForTest();
+      activeWorker.emit("error", new Error("forced worker stop for test"));
       let closeCompleted = false;
-      const close = closeSessionTouchedFilesWorker().then(() => {
+      const close = closeWorkerThroughGatewayOwner().then(() => {
         closeCompleted = true;
       });
       await Promise.resolve();
       expect(closeCompleted).toBe(false);
 
       releaseTermination();
-      await Promise.all([termination, close]);
+      await close;
     } finally {
       releaseTermination();
       terminateSpy.mockRestore();
     }
 
+    releaseGatewayWorker = acquireSessionTouchedFilesWorkerForGateway();
+    const secondPostMessageSpy = vi.spyOn(Worker.prototype, "postMessage");
     await loadSessionTouchedFilesInWorker(scope, `main\0worker-terminate-session\0${storePath}`);
+    const secondActiveWorker = secondPostMessageSpy.mock.instances.at(-1);
+    secondPostMessageSpy.mockRestore();
+    if (!(secondActiveWorker instanceof Worker)) {
+      throw new Error("restarted session touched-files worker was not created");
+    }
     let releaseSecondTermination: () => void = () => {};
     const secondTerminationGate = new Promise<void>((resolve) => {
       releaseSecondTermination = resolve;
@@ -302,15 +325,15 @@ describe("session touched-files worker runtime", () => {
       });
     try {
       let closeCompleted = false;
-      const close = closeSessionTouchedFilesWorker().then(() => {
+      const close = closeWorkerThroughGatewayOwner().then(() => {
         closeCompleted = true;
       });
-      const termination = terminateSessionTouchedFilesWorkerForTest();
+      secondActiveWorker.emit("error", new Error("forced worker stop for test"));
       await Promise.resolve();
       expect(closeCompleted).toBe(false);
 
       releaseSecondTermination();
-      await Promise.all([close, termination]);
+      await close;
     } finally {
       releaseSecondTermination();
       secondTerminateSpy.mockRestore();
@@ -341,10 +364,16 @@ describe("session touched-files worker runtime", () => {
       await appendTranscriptMessage(scope, {
         message: { role: "assistant", content: [] },
       });
+      const postMessageSpy = vi.spyOn(Worker.prototype, "postMessage");
       await loadSessionTouchedFilesInWorker(
         scope,
         `main\0worker-cleanup-error-session\0${storePath}`,
       );
+      const activeWorker = postMessageSpy.mock.instances.at(-1);
+      postMessageSpy.mockRestore();
+      if (!(activeWorker instanceof Worker)) {
+        throw new Error("session touched-files worker was not created");
+      }
       const releaseSpy = vi
         .spyOn(agentDatabaseLease, "releaseOpenClawAgentDatabaseLeasesByNamespace")
         .mockImplementationOnce(() => {
@@ -352,23 +381,17 @@ describe("session touched-files worker runtime", () => {
         });
       try {
         let close: Promise<void>;
-        let terminationResult: Promise<unknown>;
         if (ordering === "forced stop starts first") {
-          terminationResult = terminateSessionTouchedFilesWorkerForTest().catch(
-            (error: unknown) => error,
-          );
-          close = closeSessionTouchedFilesWorker();
+          activeWorker.emit("error", new Error("forced worker stop for test"));
+          close = closeWorkerThroughGatewayOwner();
         } else {
-          close = closeSessionTouchedFilesWorker();
-          terminationResult = terminateSessionTouchedFilesWorkerForTest().catch(
-            (error: unknown) => error,
-          );
+          close = closeWorkerThroughGatewayOwner();
+          activeWorker.emit("error", new Error("forced worker stop for test"));
         }
 
         await expect(close).rejects.toThrow(
           "failed to release terminated session worker database leases",
         );
-        await expect(terminationResult).resolves.toBeInstanceOf(Error);
       } finally {
         releaseSpy.mockRestore();
       }
@@ -392,8 +415,7 @@ describe("session touched-files worker runtime", () => {
     await appendTranscriptMessage(restartedScope, {
       message: { role: "assistant", content: [] },
     });
-    await releaseGatewayWorker?.();
-    releaseGatewayWorker = undefined;
+    await closeWorkerThroughGatewayOwner();
 
     await expect(
       loadSessionTouchedFilesInWorker(
