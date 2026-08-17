@@ -187,7 +187,7 @@ async function reserveWorkerAdmission(): Promise<{ generation: number; release: 
 
 function waitForWorkerAdmissions(): Promise<void> | undefined {
   if (activeAdmissions === 0) {
-    return;
+    return undefined;
   }
   return new Promise<void>((resolve) => {
     resolveAdmissionsDrained = resolve;
