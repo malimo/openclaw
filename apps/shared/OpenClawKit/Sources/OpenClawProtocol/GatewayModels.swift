@@ -6132,6 +6132,8 @@ public struct SessionRow: Codable, Sendable {
     public let execcwd: String?
     public let spawnedworkspacedir: String?
     public let spawnedcwd: String?
+    public let permissionmode: AnyCodable?
+    public let sessionroot: String?
     public let createdvia: AnyCodable?
     public let createdactor: SessionCreatedActor?
     public let visibility: SessionVisibility?
@@ -6196,6 +6198,8 @@ public struct SessionRow: Codable, Sendable {
         execcwd: String? = nil,
         spawnedworkspacedir: String? = nil,
         spawnedcwd: String? = nil,
+        permissionmode: AnyCodable? = nil,
+        sessionroot: String? = nil,
         createdvia: AnyCodable? = nil,
         createdactor: SessionCreatedActor? = nil,
         visibility: SessionVisibility? = nil,
@@ -6259,6 +6263,8 @@ public struct SessionRow: Codable, Sendable {
         self.execcwd = execcwd
         self.spawnedworkspacedir = spawnedworkspacedir
         self.spawnedcwd = spawnedcwd
+        self.permissionmode = permissionmode
+        self.sessionroot = sessionroot
         self.createdvia = createdvia
         self.createdactor = createdactor
         self.visibility = visibility
@@ -6324,6 +6330,8 @@ public struct SessionRow: Codable, Sendable {
         case execcwd = "execCwd"
         case spawnedworkspacedir = "spawnedWorkspaceDir"
         case spawnedcwd = "spawnedCwd"
+        case permissionmode = "permissionMode"
+        case sessionroot = "sessionRoot"
         case createdvia = "createdVia"
         case createdactor = "createdActor"
         case visibility
@@ -8526,6 +8534,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let category: String?
     public let model: String?
     public let thinkinglevel: String?
+    public let permissionmode: AnyCodable?
     public let incognito: Bool?
     public let visibility: SessionVisibility?
     public let catalogid: String?
@@ -8552,6 +8561,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         category: String? = nil,
         model: String? = nil,
         thinkinglevel: String? = nil,
+        permissionmode: AnyCodable? = nil,
         incognito: Bool? = nil,
         visibility: SessionVisibility? = nil,
         catalogid: String? = nil,
@@ -8577,6 +8587,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.category = category
         self.model = model
         self.thinkinglevel = thinkinglevel
+        self.permissionmode = permissionmode
         self.incognito = incognito
         self.visibility = visibility
         self.catalogid = catalogid
@@ -8604,6 +8615,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case category
         case model
         case thinkinglevel = "thinkingLevel"
+        case permissionmode = "permissionMode"
         case incognito
         case visibility
         case catalogid = "catalogId"
@@ -8878,6 +8890,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let execsecurity: AnyCodable?
     public let execask: AnyCodable?
     public let execnode: AnyCodable?
+    public let permissionmode: AnyCodable?
     public let model: AnyCodable?
     public let completionownersessionkey: AnyCodable?
     public let inheritedtoolpolicyversion: AnyCodable?
@@ -8913,6 +8926,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         execsecurity: AnyCodable? = nil,
         execask: AnyCodable? = nil,
         execnode: AnyCodable? = nil,
+        permissionmode: AnyCodable? = nil,
         model: AnyCodable? = nil,
         completionownersessionkey: AnyCodable? = nil,
         inheritedtoolpolicyversion: AnyCodable? = nil,
@@ -8947,6 +8961,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.execsecurity = execsecurity
         self.execask = execask
         self.execnode = execnode
+        self.permissionmode = permissionmode
         self.model = model
         self.completionownersessionkey = completionownersessionkey
         self.inheritedtoolpolicyversion = inheritedtoolpolicyversion
@@ -8983,6 +8998,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case execsecurity = "execSecurity"
         case execask = "execAsk"
         case execnode = "execNode"
+        case permissionmode = "permissionMode"
         case model
         case completionownersessionkey = "completionOwnerSessionKey"
         case inheritedtoolpolicyversion = "inheritedToolPolicyVersion"
@@ -9016,6 +9032,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
     public let execsecurity: AnyCodable?
     public let execask: AnyCodable?
     public let execnode: AnyCodable?
+    public let permissionmode: AnyCodable?
     public let model: AnyCodable?
     public let completionownersessionkey: AnyCodable?
     public let inheritedtoolpolicyversion: AnyCodable?
@@ -9047,6 +9064,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         execsecurity: AnyCodable? = nil,
         execask: AnyCodable? = nil,
         execnode: AnyCodable? = nil,
+        permissionmode: AnyCodable? = nil,
         model: AnyCodable? = nil,
         completionownersessionkey: AnyCodable? = nil,
         inheritedtoolpolicyversion: AnyCodable? = nil,
@@ -9077,6 +9095,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         self.execsecurity = execsecurity
         self.execask = execask
         self.execnode = execnode
+        self.permissionmode = permissionmode
         self.model = model
         self.completionownersessionkey = completionownersessionkey
         self.inheritedtoolpolicyversion = inheritedtoolpolicyversion
@@ -9109,6 +9128,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         case execsecurity = "execSecurity"
         case execask = "execAsk"
         case execnode = "execNode"
+        case permissionmode = "permissionMode"
         case model
         case completionownersessionkey = "completionOwnerSessionKey"
         case inheritedtoolpolicyversion = "inheritedToolPolicyVersion"
