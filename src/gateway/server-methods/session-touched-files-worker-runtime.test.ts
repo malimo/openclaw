@@ -398,6 +398,49 @@ describe("session touched-files worker runtime", () => {
     },
   );
 
+  it("recovers a later load after reporting worker lease-cleanup failure", async () => {
+    const directory = fs.mkdtempSync(
+      path.join(fs.realpathSync(os.tmpdir()), "openclaw-touched-worker-cleanup-recovery-"),
+    );
+    temporaryDirectories.push(directory);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: directory };
+    openOpenClawStateDatabase({ env });
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+    const scope = {
+      agentId: "main",
+      env,
+      sessionId: "worker-cleanup-recovery-session",
+      sessionKey: "agent:main:worker-cleanup-recovery-session",
+    };
+    const cacheKey = `main\0worker-cleanup-recovery-session\0${storePath}`;
+    await appendTranscriptMessage(scope, {
+      message: { role: "assistant", content: [] },
+    });
+
+    const postMessageSpy = vi.spyOn(Worker.prototype, "postMessage");
+    await loadSessionTouchedFilesInWorker(scope, cacheKey);
+    const activeWorker = postMessageSpy.mock.instances.at(-1);
+    postMessageSpy.mockRestore();
+    if (!(activeWorker instanceof Worker)) {
+      throw new Error("session touched-files worker was not created");
+    }
+
+    const releaseSpy = vi
+      .spyOn(agentDatabaseLease, "releaseOpenClawAgentDatabaseLeasesByNamespace")
+      .mockImplementationOnce(() => {
+        throw new Error("lease cleanup failed for test");
+      });
+    try {
+      activeWorker.emit("error", new Error("forced worker stop for test"));
+      await expect(loadSessionTouchedFilesInWorker(scope, cacheKey)).rejects.toThrow(
+        "failed to release terminated session worker database leases",
+      );
+      await expect(loadSessionTouchedFilesInWorker(scope, cacheKey)).resolves.toEqual([]);
+    } finally {
+      releaseSpy.mockRestore();
+    }
+  });
+
   it("re-enables worker admission for a restarted Gateway", async () => {
     const directory = fs.mkdtempSync(
       path.join(fs.realpathSync(os.tmpdir()), "openclaw-touched-worker-restart-"),

@@ -200,7 +200,7 @@ export async function loadSessionTouchedFilesInWorker(
 ): Promise<SessionTouchedFile[]> {
   const admission = await reserveWorkerAdmission();
   try {
-    await awaitStoppingWorker(false);
+    await awaitStoppingWorker(true);
     if (!acceptingRequests || admission.generation !== admissionGeneration) {
       throw new Error("session touched-files worker is shutting down");
     }
