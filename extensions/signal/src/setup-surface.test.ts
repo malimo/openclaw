@@ -305,7 +305,7 @@ describe("signalSetupWizard QR linking", () => {
         expiresAtMs: 1_800_000_120_000,
       }),
     );
-    expect(beforePersistentEffect).toHaveBeenCalledOnce();
+    expect(beforePersistentEffect).not.toHaveBeenCalled();
 
     finishLink();
     await expect(resultPromise).resolves.toMatchObject({
@@ -370,6 +370,56 @@ describe("signalSetupWizard QR linking", () => {
     });
   });
 
+  it("keeps hosted cancellation unlocked until the link process has stopped", async () => {
+    const abortController = new AbortController();
+    let cancellationLocked = false;
+    let releaseCleanup!: () => void;
+    const cleanup = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const cleanupStarted = vi.fn();
+    linkSignalCliAccountMock.mockImplementationOnce(
+      async ({ signal }) =>
+        await new Promise((resolve) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              cleanupStarted();
+              void cleanup.then(() =>
+                resolve({ ok: false, error: "Signal account linking was cancelled." }),
+              );
+            },
+            { once: true },
+          );
+        }),
+    );
+    const beforePersistentEffect = vi.fn(async () => {
+      cancellationLocked = true;
+    });
+    const resultPromise = prepare({
+      prompter: createQrPrompter(),
+      options: {
+        allowSignalInstall: true,
+        abortSignal: abortController.signal,
+        beforePersistentEffect,
+      },
+    });
+
+    await vi.waitFor(() => expect(linkSignalCliAccountMock).toHaveBeenCalledOnce());
+    expect(cancellationLocked).toBe(false);
+    abortController.abort();
+    await vi.waitFor(() => expect(cleanupStarted).toHaveBeenCalledOnce());
+    expect(beforePersistentEffect).not.toHaveBeenCalled();
+
+    const settled = vi.fn();
+    void resultPromise.then(settled);
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+
+    releaseCleanup();
+    await expect(resultPromise).resolves.toBeUndefined();
+  });
+
   it("cancels setup when a different QR-linked account is declined", async () => {
     linkSignalCliAccountMock.mockResolvedValueOnce({
       ok: true,
@@ -394,16 +444,13 @@ describe("signalSetupWizard QR linking", () => {
     });
   });
 
-  it.each([
-    { name: "installation", detected: false, confirms: [true], installCalls: 0 },
-    { name: "linking", detected: true, confirms: [false, true], installCalls: 0 },
-  ])("guards $name before its persistent effect", async ({ detected, confirms, installCalls }) => {
-    detectBinaryMock.mockResolvedValue(detected);
+  it("guards installation before its persistent effect", async () => {
+    detectBinaryMock.mockResolvedValue(false);
     const blocked = new Error("inference authorization failed");
 
     await expect(
       prepare({
-        prompter: createQrPrompter({ confirmValues: confirms }),
+        prompter: createQrPrompter({ confirmValues: [true] }),
         options: {
           allowSignalInstall: true,
           beforePersistentEffect: vi.fn(async () => {
@@ -412,28 +459,22 @@ describe("signalSetupWizard QR linking", () => {
         },
       }),
     ).rejects.toBe(blocked);
-    expect(installSignalCliMock).toHaveBeenCalledTimes(installCalls);
+    expect(installSignalCliMock).not.toHaveBeenCalled();
     expect(linkSignalCliAccountMock).not.toHaveBeenCalled();
   });
 
-  it("reauthorizes linking after installing signal-cli", async () => {
+  it("keeps linking cancellable after installing signal-cli", async () => {
     detectBinaryMock.mockResolvedValue(false);
     installSignalCliMock.mockResolvedValue({ ok: true, cliPath: "/managed/signal-cli" });
-    const blocked = new Error("inference authorization failed");
-    const beforePersistentEffect = vi
-      .fn()
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(blocked);
+    const beforePersistentEffect = vi.fn(async () => undefined);
 
-    await expect(
-      prepare({
-        prompter: createQrPrompter({ confirmValues: [true, true] }),
-        options: { allowSignalInstall: true, beforePersistentEffect },
-      }),
-    ).rejects.toBe(blocked);
-    expect(beforePersistentEffect).toHaveBeenCalledTimes(2);
+    await prepare({
+      prompter: createQrPrompter({ confirmValues: [true, true] }),
+      options: { allowSignalInstall: true, beforePersistentEffect },
+    });
+    expect(beforePersistentEffect).toHaveBeenCalledOnce();
     expect(installSignalCliMock).toHaveBeenCalledOnce();
-    expect(linkSignalCliAccountMock).not.toHaveBeenCalled();
+    expect(linkSignalCliAccountMock).toHaveBeenCalledOnce();
   });
 
   it("links a named account without changing its configured sibling", async () => {
