@@ -7,6 +7,7 @@ import {
   recordToolExecutionTracked,
   resetAdjustedParamsByToolCallIdForTests,
 } from "./agent-tools.before-tool-call.state.js";
+import { buildPayloads } from "./embedded-agent-runner/run/payloads.test-helpers.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 
 describe("tool terminal outcome observer", () => {
@@ -41,6 +42,38 @@ describe("tool terminal outcome observer", () => {
     expect(
       observe({ toolName: "message", arguments: actionA, outcome: "success" }).lastToolError,
     ).toBeUndefined();
+  });
+
+  it("surfaces a channel-safe receipt when an edit failure recovers", () => {
+    const observe = createToolTerminalObserver("run-edit-recovery");
+    const edit = { path: "/tmp/demo.txt", oldText: "before", newText: "after" };
+
+    observe({
+      toolName: "edit",
+      arguments: edit,
+      outcome: "failure",
+      failure: { error: "Could not find TOP_SECRET text in /tmp/demo.txt" },
+    });
+    const recovered = observe({ toolName: "edit", arguments: edit, outcome: "success" });
+    const afterRead = observe({
+      toolName: "read",
+      arguments: { path: "/tmp/demo.txt" },
+      outcome: "success",
+    });
+    const payloads = buildPayloads({
+      assistantTexts: ["Updated the file."],
+      lastToolRecovery: afterRead.lastToolRecovery,
+    });
+
+    expect(recovered.lastToolError).toBeUndefined();
+    expect(recovered.lastToolRecovery).toEqual({ toolName: "edit" });
+    expect(afterRead.lastToolRecovery).toEqual({ toolName: "edit" });
+    expect(payloads.map((payload) => payload.text)).toEqual([
+      "Updated the file.",
+      "✅ 📝 Edit succeeded after retry.",
+    ]);
+    expect(payloads.map((payload) => payload.text).join("\n")).not.toContain("TOP_SECRET");
+    expect(payloads.map((payload) => payload.text).join("\n")).not.toContain("/tmp/demo.txt");
   });
 
   it("uses host execution and adjusted-argument evidence before fallback facts", () => {
