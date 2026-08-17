@@ -21,7 +21,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessions/tools/path-utils.js";
-import { runGit } from "../../agents/worktrees/git.js";
+import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -75,7 +75,6 @@ const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 const MAX_BROWSER_ENTRIES = 250;
 const MAX_SEARCH_ENTRIES = 500;
 const MAX_SEARCH_VISITED_ENTRIES = 5_000;
-const gitCheckoutStatusProbes = new Map<string, Promise<boolean>>();
 // Matches file-type's documented default buffer sample while keeping metadata
 // classification independent from the 256 KiB inline-content cap.
 const MIME_SNIFF_PREFIX_BYTES = 4_100;
@@ -553,32 +552,11 @@ async function loadSessionFiles(params: {
   };
 }
 
-async function loadGitCheckoutStatus(diffCwd: string | undefined): Promise<boolean | undefined> {
+function loadGitCheckoutStatus(diffCwd: string | undefined): boolean | undefined {
   if (!diffCwd) {
     return undefined;
   }
-  const cacheKey = path.resolve(diffCwd);
-  const activeProbe = gitCheckoutStatusProbes.get(cacheKey);
-  if (activeProbe) {
-    return await activeProbe;
-  }
-
-  const promise = (async () => {
-    try {
-      const result = await runGit(cacheKey, ["rev-parse", "--show-toplevel"]);
-      return result.code === 0 && Boolean(result.stdout.trim());
-    } catch {
-      return false;
-    }
-  })();
-  gitCheckoutStatusProbes.set(cacheKey, promise);
-  try {
-    return await promise;
-  } finally {
-    if (gitCheckoutStatusProbes.get(cacheKey) === promise) {
-      gitCheckoutStatusProbes.delete(cacheKey);
-    }
-  }
+  return insideGitCheckout(diffCwd);
 }
 
 async function buildWorkspaceStatus(params: {
@@ -586,7 +564,7 @@ async function buildWorkspaceStatus(params: {
   agentId?: string;
 }): Promise<SessionsWorkspaceStatusResult> {
   const loaded = loadSessionFileRoot(params);
-  const gitCheckout = await loadGitCheckoutStatus(loaded.diffCwd);
+  const gitCheckout = loadGitCheckoutStatus(loaded.diffCwd);
   return {
     sessionKey: params.sessionKey,
     ...(loaded.root ? { root: loaded.root } : {}),
@@ -607,7 +585,7 @@ async function buildListResult(params: {
 }> {
   const loaded = await loadSessionFiles(params);
   const root = loaded.root;
-  const gitCheckout = await loadGitCheckoutStatus(loaded.diffCwd);
+  const gitCheckout = loadGitCheckoutStatus(loaded.diffCwd);
   const workspaceFiles = root
     ? loaded.files.filter((file) =>
         Boolean(resolveTouchedFilePath({ root, fileRoot: loaded.fileRoot, filePath: file.path })),

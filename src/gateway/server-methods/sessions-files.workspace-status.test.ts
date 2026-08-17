@@ -105,87 +105,31 @@ describe("sessions.workspace.status RPC handler", () => {
     expect(removedCheckoutPayload.gitCheckout).toBe(false);
   });
 
-  it("coalesces only concurrent checkout probes", async () => {
-    let finishProbe: (result: { code: number; stderr: string; stdout: string }) => void = () => {};
-    hoisted.runGit.mockImplementationOnce(
-      async () =>
-        await new Promise((resolve) => {
-          finishProbe = resolve;
-        }),
-    );
-
-    const first = invokeSessionFilesHandler("sessions.workspace.status", {
-      sessionKey: "agent:main:main",
-    });
-    const second = invokeSessionFilesHandler("sessions.workspace.status", {
-      sessionKey: "agent:main:main",
-    });
-    await vi.waitFor(() => expect(hoisted.runGit).toHaveBeenCalledOnce());
-
-    finishProbe({ code: 0, stderr: "", stdout: `${workspaceRoot}\n` });
-    const [firstPayload, secondPayload] = await Promise.all([
-      first.then(expectOkPayload),
-      second.then(expectOkPayload),
-    ]);
-    expect(firstPayload.gitCheckout).toBe(true);
-    expect(secondPayload).toEqual(firstPayload);
-
-    hoisted.runGit.mockResolvedValueOnce({ code: 1, stderr: "not a checkout", stdout: "" });
-    const freshPayload = expectOkPayload(
-      await invokeSessionFilesHandler("sessions.workspace.status", {
-        sessionKey: "agent:main:main",
-      }),
-    );
-    expect(freshPayload.gitCheckout).toBe(false);
-    expect(hoisted.runGit).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not queue a healthy workspace behind stalled probes", async () => {
-    let releaseProbes: () => void = () => {};
-    const probeGate = new Promise<void>((resolve) => {
-      releaseProbes = resolve;
-    });
+  it("detects nested checkouts without spawning Git", async () => {
+    const checkoutRoot = path.join(workspaceRoot, "checkout");
+    const nestedRoot = path.join(checkoutRoot, "packages", "app");
+    fs.mkdirSync(nestedRoot, { recursive: true });
+    fs.mkdirSync(path.join(checkoutRoot, ".git"));
     hoisted.loadSessionEntry.mockImplementation((sessionKey: string) => {
-      const sessionId = sessionKey.split(":").at(-1) ?? "main";
-      const sessionRoot = path.join(workspaceRoot, sessionId);
       return {
         agentId: "main",
         canonicalKey: sessionKey,
         cfg: {},
         storePath: path.join(workspaceRoot, ".sessions.json"),
         entry: {
-          sessionId,
-          sessionFile: `${sessionId}.jsonl`,
-          spawnedCwd: sessionRoot,
+          sessionId: "nested-checkout",
+          sessionFile: "nested-checkout.jsonl",
+          spawnedCwd: nestedRoot,
         },
       };
     });
-    const runPressureProbe = async (cwd: string) => {
-      if (cwd.endsWith("pressure-4")) {
-        return { code: 0, stderr: "", stdout: `${cwd}\n` };
-      }
-      await probeGate;
-      return { code: 0, stderr: "", stdout: `${cwd}\n` };
-    };
 
-    await hoisted.runGit.withImplementation(runPressureProbe, async () => {
-      const stalledRequests = Array.from({ length: 4 }, (_, index) =>
-        invokeSessionFilesHandler("sessions.workspace.status", {
-          sessionKey: `agent:main:pressure-${String(index)}`,
-        }),
-      );
-      await vi.waitFor(() => expect(hoisted.runGit).toHaveBeenCalledTimes(4));
-
-      const healthyPayload = expectOkPayload(
-        await invokeSessionFilesHandler("sessions.workspace.status", {
-          sessionKey: "agent:main:pressure-4",
-        }),
-      );
-      expect(healthyPayload.gitCheckout).toBe(true);
-      expect(hoisted.runGit).toHaveBeenCalledTimes(5);
-
-      releaseProbes();
-      await Promise.all(stalledRequests);
-    });
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.workspace.status", {
+        sessionKey: "agent:main:nested-checkout",
+      }),
+    );
+    expect(payload.gitCheckout).toBe(true);
+    expect(hoisted.runGit).not.toHaveBeenCalled();
   });
 });
