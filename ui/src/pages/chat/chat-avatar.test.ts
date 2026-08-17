@@ -114,7 +114,7 @@ describe("renderChatAvatar", () => {
     expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("B");
   });
 
-  it("caches a missing local profile avatar before retrying it", async () => {
+  it("caches a missing unrevisioned profile avatar before retrying it", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const gatewayOrigin = globalThis.location.origin;
     setAvatarGatewayOrigin(gatewayOrigin);
@@ -122,7 +122,7 @@ describe("renderChatAvatar", () => {
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response(null, { status: 404 }));
     const container = document.createElement("div");
-    const avatarUrl = "/api/users/dd7c98e2-f51d-4590-b588-fa0682e165b7/avatar?v=7";
+    const avatarUrl = "/api/users/dd7c98e2-f51d-4590-b588-fa0682e165b7/avatar";
     const renderUser = () =>
       render(renderChatAvatar("user", undefined, { name: "Hannah", avatar: avatarUrl }), container);
 
