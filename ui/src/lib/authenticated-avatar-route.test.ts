@@ -100,6 +100,41 @@ it("bounds released missing routes while preserving the newest cooldown", async 
   reuseNewest.reset();
 });
 
+it("bounds released pending routes while preserving the newest requests", async () => {
+  vi.useFakeTimers();
+  const signals: AbortSignal[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((_url: string, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!signal) {
+        throw new Error("missing avatar fetch signal");
+      }
+      signals.push(signal);
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("avatar fetch aborted")), {
+          once: true,
+        });
+      });
+    }) as unknown as typeof fetch,
+  );
+  const loaders = Array.from(
+    { length: 129 },
+    () => new AuthenticatedAvatarRouteLoader(vi.fn(), { cacheNotFound: true }),
+  );
+
+  for (const [index, loader] of loaders.entries()) {
+    expect(loader.resolve(`/avatar/pending-${String(index)}`, ["token"])).toBeNull();
+    loader.reset();
+  }
+
+  expect(signals).toHaveLength(129);
+  expect(signals[0]?.aborted).toBe(true);
+  expect(signals.slice(1).every((signal) => !signal.aborted)).toBe(true);
+
+  await vi.advanceTimersByTimeAsync(30_000);
+});
+
 it("shares pending fetches and revokes the resolved blob on reset", async () => {
   const createObjectURL = vi.fn(() => "blob:assistant-avatar");
   const revokeObjectURL = vi.fn();

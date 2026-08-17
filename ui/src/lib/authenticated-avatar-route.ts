@@ -11,7 +11,7 @@ type AvatarRouteEntry = {
 /** Bound protected avatar fetches so a stalled Gateway route cannot pin UI state forever. */
 const AUTHENTICATED_AVATAR_FETCH_TIMEOUT_MS = 30_000;
 const AUTHENTICATED_AVATAR_NOT_FOUND_CACHE_MS = 30_000;
-const AUTHENTICATED_AVATAR_NOT_FOUND_CACHE_MAX_ENTRIES = 128;
+const AUTHENTICATED_AVATAR_UNOWNED_CACHE_MAX_ENTRIES = 128;
 const sharedAvatarRoutes = new Map<string, AvatarRouteEntry>();
 
 function deleteAvatarRouteEntry(key: string, entry: AvatarRouteEntry) {
@@ -29,24 +29,27 @@ function deleteAvatarRouteEntry(key: string, entry: AvatarRouteEntry) {
   }
 }
 
-function trimSettledNotFoundEntries(protectedEntry: AvatarRouteEntry) {
-  let retainedMisses = 0;
+function isUnownedCacheEntry(entry: AvatarRouteEntry): boolean {
+  return (
+    entry.cacheNotFound &&
+    entry.consumers.size === 0 &&
+    (entry.pending || entry.notFoundUntilMs !== undefined)
+  );
+}
+
+function trimUnownedCacheEntries(protectedEntry: AvatarRouteEntry) {
+  let retainedEntries = 0;
   for (const entry of sharedAvatarRoutes.values()) {
-    if (!entry.pending && entry.consumers.size === 0 && entry.notFoundUntilMs !== undefined) {
-      retainedMisses += 1;
+    if (isUnownedCacheEntry(entry)) {
+      retainedEntries += 1;
     }
   }
-  let excess = retainedMisses - AUTHENTICATED_AVATAR_NOT_FOUND_CACHE_MAX_ENTRIES;
+  let excess = retainedEntries - AUTHENTICATED_AVATAR_UNOWNED_CACHE_MAX_ENTRIES;
   if (excess <= 0) {
     return;
   }
   for (const [key, entry] of sharedAvatarRoutes) {
-    if (
-      entry !== protectedEntry &&
-      !entry.pending &&
-      entry.consumers.size === 0 &&
-      entry.notFoundUntilMs !== undefined
-    ) {
+    if (entry !== protectedEntry && isUnownedCacheEntry(entry)) {
       deleteAvatarRouteEntry(key, entry);
       excess -= 1;
       if (excess === 0) {
@@ -70,11 +73,11 @@ function releaseEntry(key: string, owner: symbol) {
     return;
   }
   entry.consumers.delete(owner);
-  if (
-    entry.consumers.size > 0 ||
-    (entry.pending && entry.cacheNotFound) ||
-    entry.releaseTimer !== undefined
-  ) {
+  if (entry.consumers.size > 0 || entry.releaseTimer !== undefined) {
+    return;
+  }
+  if (entry.pending && entry.cacheNotFound) {
+    trimUnownedCacheEntries(entry);
     return;
   }
   scheduleEntryRelease(key, entry);
@@ -101,7 +104,7 @@ function scheduleEntryRelease(key: string, entry: AvatarRouteEntry) {
     }
     deleteAvatarRouteEntry(key, entry);
   }, releaseDelayMs);
-  trimSettledNotFoundEntries(entry);
+  trimUnownedCacheEntries(entry);
 }
 
 async function fetchAvatarRoute(
