@@ -1,5 +1,6 @@
 // Failure output tests cover CLI error formatting and failure summaries.
 import { describe, expect, it } from "vitest";
+import { GatewayCredentialsRequiredError } from "../gateway/call.js";
 import { CliParseError, formatCliFailureLines, formatCliJsonFailure } from "./failure-output.js";
 
 describe("formatCliJsonFailure", () => {
@@ -55,6 +56,24 @@ describe("formatCliJsonFailure", () => {
     });
     expect(payload.error.message).not.toContain("internal parse cause");
   });
+
+  it.each([
+    { label: "default output", env: {} },
+    { label: "debug output", env: { OPENCLAW_DEBUG: "1" } },
+  ])("keeps gateway credential guidance unchanged in $label", ({ env }) => {
+    const error = new GatewayCredentialsRequiredError({
+      method: "device.pair.list",
+      configPath: "/tmp/openclaw.json",
+    });
+
+    expect(formatCliJsonFailure(error, { env })).toEqual({
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: error.message,
+      },
+    });
+  });
 });
 
 describe("formatCliFailureLines", () => {
@@ -98,6 +117,24 @@ describe("formatCliFailureLines", () => {
       "[openclaw] Try: openclaw doctor",
       "[openclaw] Help: openclaw --help",
     ]);
+  });
+
+  it.each([
+    { label: "default output", env: {} },
+    { label: "debug output", env: { OPENCLAW_DEBUG: "1" } },
+  ])("renders gateway credential guidance without crash framing in $label", ({ env }) => {
+    const error = new GatewayCredentialsRequiredError({
+      method: "device.pair.list",
+      configPath: "/tmp/openclaw.json",
+    });
+
+    expect(
+      formatCliFailureLines({
+        title: "The CLI command failed.",
+        error,
+        env,
+      }),
+    ).toEqual(error.message.split("\n"));
   });
 
   it("prints stack details when debug output is requested", () => {

@@ -40,6 +40,33 @@ export class CliParseError extends Error {
   }
 }
 
+function isGatewayCredentialsCliError(
+  error: unknown,
+): error is Error & { method: string; configPath: string } {
+  // Keep the root failure renderer lean; importing gateway/call would pull the
+  // transport and config stack into every CLI startup path.
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return (
+    error.name === "GatewayCredentialsRequiredError" &&
+    "method" in error &&
+    typeof error.method === "string" &&
+    "configPath" in error &&
+    typeof error.configPath === "string"
+  );
+}
+
+export function isExpectedCliError(error: unknown): error is Error {
+  return error instanceof CliParseError || isGatewayCredentialsCliError(error);
+}
+
+export function rethrowExpectedCliError(error: unknown): void {
+  if (isExpectedCliError(error)) {
+    throw error;
+  }
+}
+
 /** Canonical machine-readable failure envelope for CLI-owned errors. */
 export function formatCliJsonFailure(
   error: unknown,
@@ -48,7 +75,9 @@ export function formatCliJsonFailure(
   const message =
     error instanceof CliParseError
       ? formatErrorMessage(error.machineOutput.trimEnd())
-      : formatCliOperatorError(error, options);
+      : isGatewayCredentialsCliError(error)
+        ? formatErrorMessage(error.message.trimEnd())
+        : formatCliOperatorError(error, options);
   return {
     ok: false,
     error: {
@@ -99,6 +128,9 @@ function pushPrefixed(out: string[], value: string): void {
 export function formatCliFailureLines(options: FormatCliFailureOptions): string[] {
   if (options.error instanceof CliParseError) {
     return options.error.humanOutputWritten ? [] : options.error.humanOutput.trimEnd().split("\n");
+  }
+  if (isGatewayCredentialsCliError(options.error)) {
+    return options.error.message.trimEnd().split("\n");
   }
 
   // Default output stays terse; causes and stack traces require explicit debug intent.
