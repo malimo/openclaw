@@ -1,6 +1,6 @@
 // OpenClaw Gateway tests cover ordinary chat turns, history, approvals, and reset.
 
-import "./system-agent.test-support.js";
+import "./system-agent-mocks.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";

@@ -1,6 +1,6 @@
 // OpenClaw Gateway tests cover QR reply recovery and capacity leases.
 
-import "./system-agent.test-support.js";
+import "./system-agent-mocks.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
@@ -25,7 +25,6 @@ import {
   transcriptStoreMocks,
   waitOneTask,
 } from "./system-agent.test-support.js";
-
 describe("openclaw.chat", () => {
   it("persists a delayed terminal QR reply once and replays it after dropped delivery", async () => {
     const delayed = await makeDelayedTerminalQrEngine({

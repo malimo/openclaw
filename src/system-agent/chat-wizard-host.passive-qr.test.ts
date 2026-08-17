@@ -132,10 +132,10 @@ describe("SystemAgentChatEngine wizard", () => {
   });
 
   it("projects a successor QR through the last client-known poll step", async () => {
-    const firstOwner = createDeferred<void>();
-    const secondOwner = createDeferred<void>();
-    const secondQrStarted = createDeferred<void>();
-    const releaseSecondQr = createDeferred<void>();
+    const firstOwner = createDeferred();
+    const secondOwner = createDeferred();
+    const secondQrStarted = createDeferred();
+    const releaseSecondQr = createDeferred();
     const engine = createQrEngine(async (_channel, prompter) => {
       await prompter.qrCode?.({
         title: "Link the first device",
@@ -201,9 +201,9 @@ describe("SystemAgentChatEngine wizard", () => {
   });
 
   it("cancels a successor QR through an unacknowledged predecessor cursor", async () => {
-    const firstOwner = createDeferred<void>();
-    const secondOwner = createDeferred<void>();
-    const secondQrStarted = createDeferred<void>();
+    const firstOwner = createDeferred();
+    const secondOwner = createDeferred();
+    const secondQrStarted = createDeferred();
     const engine = createQrEngine(async (_channel, prompter) => {
       await prompter.qrCode?.({
         title: "Link the first device",

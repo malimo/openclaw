@@ -1,6 +1,6 @@
 // OpenClaw Gateway tests cover chat initialization, admission, and replacement.
 
-import "./system-agent.test-support.js";
+import "./system-agent-mocks.test-support.js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { defaultRuntime } from "../../runtime.js";

@@ -1,6 +1,6 @@
 // OpenClaw Gateway tests cover structured setup method execution.
 
-import "./system-agent.test-support.js";
+import "./system-agent-mocks.test-support.js";
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -20,7 +20,6 @@ import {
   systemAgentLane,
   verifiedConfig,
 } from "./system-agent.test-support.js";
-
 describe("openclaw.setup", () => {
   it("returns a retryable busy error while another activation is running", async () => {
     const firstStarted = createDeferred();
